@@ -344,7 +344,7 @@ const LEVELS = {
     gravity: 0.6,
     jumpVelocity: -14.5,
     maxJumps: 2,
-    platformCount: () => Math.max(2, Math.floor(W / 320)),
+    platformCount: () => Math.max(3, Math.floor(W / 280)),
     platformMinW: 70,
     platformMaxW: 130,
     starBobSpeed: [0.03, 0.06],
@@ -1033,13 +1033,54 @@ function spawnPlatforms() {
   platforms = [];
   const lvl = LEVELS[currentLevel];
   const count = lvl.platformCount();
+
+  // Calculate max reachable height from a single jump
+  // height = v^2 / (2 * gravity)  — but we leave some margin for error
+  const jumpV = Math.abs(lvl.jumpVelocity);
+  const singleJumpHeight = (jumpV * jumpV) / (2 * lvl.gravity) * 0.75; // 75% of theoretical max for safety
+  // Double jump from a platform can reach roughly this high above it
+  const doubleJumpHeight = singleJumpHeight * 1.6;
+
+  // Build a "staircase" of platforms — each one is reachable from ground or a lower platform
+  // Start from ground level and work upward
+  let currentY = groundY; // start from ground
+  const usedXRanges = []; // track x positions to spread platforms across screen
+
   for (let i = 0; i < count; i++) {
+    const platW = lvl.platformMinW + Math.random() * (lvl.platformMaxW - lvl.platformMinW);
+
+    // Height step: reachable from currentY via single or double jump
+    // First platform is reachable by single jump from ground
+    // Higher platforms may need double jump but must be reachable from a previous platform
+    const minStep = singleJumpHeight * 0.4; // don't place too close together
+    const maxStep = (i === 0) ? singleJumpHeight : doubleJumpHeight;
+    const step = minStep + Math.random() * (maxStep - minStep);
+
+    let platY = currentY - step;
+    // Clamp so platforms don't go above the top of the screen
+    platY = Math.max(80, platY);
+
+    // Spread x across the screen — avoid stacking on the same side
+    let platX;
+    let attempts = 0;
+    do {
+      platX = 60 + Math.random() * (W - 120 - platW);
+      attempts++;
+    } while (attempts < 20 && usedXRanges.some(r =>
+      Math.abs((platX + platW / 2) - r) < W * 0.2
+    ));
+
+    usedXRanges.push(platX + platW / 2);
+
     platforms.push({
-      x: 100 + Math.random() * (W - 200),
-      y: groundY - 150 - Math.random() * (groundY - 300),
-      w: lvl.platformMinW + Math.random() * (lvl.platformMaxW - lvl.platformMinW),
+      x: platX,
+      y: platY,
+      w: platW,
       h: 18
     });
+
+    // Next platform is reachable from this one
+    currentY = platY;
   }
 }
 
@@ -1092,19 +1133,27 @@ function spawnStar() {
   const bobSpeedMin = lvl.starBobSpeed[0];
   const bobSpeedRange = lvl.starBobSpeed[1] - lvl.starBobSpeed[0];
 
+  // Calculate max reachable height from ground via double jump
+  const jumpV = Math.abs(lvl.jumpVelocity);
+  const maxReachFromGround = (jumpV * jumpV) / (2 * lvl.gravity) * 1.5; // double jump ~1.5x
+
   if (platforms.length > 0 && Math.random() < lvl.starNearPlatformChance) {
     const p = platforms[Math.floor(Math.random() * platforms.length)];
+    // Place star reachable by jumping from this platform (single jump height above it)
+    const singleJumpH = (jumpV * jumpV) / (2 * lvl.gravity) * 0.65;
     stars.push({
       x: p.x + Math.random() * p.w,
-      y: p.y - 40 - Math.random() * 60,
+      y: p.y - 30 - Math.random() * Math.min(50, singleJumpH * 0.5),
       phase: Math.random() * Math.PI * 2,
       bobSpeed: bobSpeedMin + Math.random() * bobSpeedRange,
       bobAmount: 10 + Math.random() * 8
     });
   } else {
+    // Place star reachable from ground via double jump
+    const maxHeight = Math.min(maxReachFromGround, groundY - 80);
     stars.push({
       x: Math.random() * (W - 100) + 50,
-      y: groundY - 80 - Math.random() * (groundY * 0.45),
+      y: groundY - 60 - Math.random() * maxHeight * 0.7,
       phase: Math.random() * Math.PI * 2,
       bobSpeed: bobSpeedMin + Math.random() * bobSpeedRange,
       bobAmount: 12 + Math.random() * 10
