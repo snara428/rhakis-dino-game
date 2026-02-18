@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Rhaki's Dino">
-<title>Rhaki's Dino Star Catcher!</title>
+<meta name="apple-mobile-web-app-title" content="Rhaki & Rho's Dino">
+<title>Rhaki & Rho's Dino Star Catcher!</title>
 <!-- Favicon and Apple touch icon: Red Yoshi PNG -->
 <link rel="icon" type="image/png" href="apple-touch-icon.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -204,8 +204,8 @@
 <!-- Start Screen -->
 <div id="start-screen">
   <div class="big-dino">🦖</div>
-  <h1>Rhaki's Dino Star Catcher!</h1>
-  <p class="subtitle">Help Rhaki's dinosaur catch all the stars!</p>
+  <h1>Rhaki & Rho's Dino Star Catcher!</h1>
+  <p class="subtitle">Help Rhaki & Rho's dinosaur catch all the stars!</p>
   <p class="subtitle" id="instructions-desktop">⬅️ ➡️ to move, ⬆️ to jump (press twice to double jump!)</p>
   <p class="subtitle" id="instructions-mobile" style="display:none">Tap buttons to move and jump (double tap jump!)</p>
   <button onclick="startGame()">Play!</button>
@@ -840,10 +840,10 @@ function winGame() {
   document.getElementById('stars-left').style.display = 'none';
 
   const msgs = [
-    "Rhaki, you're a star catcher! ⭐",
-    "Rhaki's Yoshi is so happy! 🦖",
-    "Amazing job, Rhaki! 🌟",
-    "Rhaki did it! Hooray! 🎊"
+    "Rhaki & Rho, you're star catchers! ⭐",
+    "Rhaki & Rho's Yoshi is so happy! 🦖",
+    "Amazing job, Rhaki & Rho! 🌟",
+    "Rhaki & Rho did it! Hooray! 🎊"
   ];
   document.getElementById('win-msg').textContent = msgs[Math.floor(Math.random() * msgs.length)];
   document.getElementById('win-screen').style.display = 'flex';
