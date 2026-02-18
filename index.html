@@ -51,6 +51,57 @@
   }
 
   #win-screen { display: none; }
+  #level-screen { display: none; }
+
+  #level-screen {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    transition: background 0.5s;
+  }
+
+  .level-title {
+    font-size: 58px;
+    color: #fff;
+    text-shadow: 3px 3px 8px rgba(0,0,0,0.5);
+    margin-bottom: 10px;
+    text-align: center;
+    padding: 0 20px;
+    animation: levelPulse 1.5s ease-in-out infinite;
+  }
+
+  .level-subtitle {
+    font-size: 24px;
+    color: rgba(255,255,255,0.9);
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+    margin-bottom: 30px;
+    text-align: center;
+    padding: 0 20px;
+  }
+
+  @keyframes levelPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+  }
+
+  /* Level indicator during gameplay */
+  #level-display {
+    position: absolute;
+    top: 15px;
+    right: 20px;
+    font-size: 20px;
+    color: #fff;
+    text-shadow: 2px 2px 0 rgba(0,0,0,0.3);
+    z-index: 5;
+  }
 
   h1 {
     font-size: 52px;
@@ -200,6 +251,9 @@
     .stars-left { font-size: 16px; top: 38px; }
     .win-msg { font-size: 22px; }
     .confetti { font-size: 40px; }
+    .level-title { font-size: 38px; }
+    .level-subtitle { font-size: 18px; }
+    #level-display { font-size: 16px; top: 10px; right: 10px; }
   }
 </style>
 </head>
@@ -215,6 +269,14 @@
   <button onclick="startGame()">Play!</button>
 </div>
 
+<!-- Level Transition Screen -->
+<div id="level-screen">
+  <div class="big-dino" id="level-emoji">🦖</div>
+  <div class="level-title" id="level-title">Level 2</div>
+  <p class="level-subtitle" id="level-subtitle">Things are getting spooky...</p>
+  <button onclick="startNextLevel()">Let's Go!</button>
+</div>
+
 <!-- Win Screen -->
 <div id="win-screen">
   <div class="confetti">🎉🌟🎉</div>
@@ -227,6 +289,7 @@
 <!-- Game HUD -->
 <div id="score-display"></div>
 <div class="stars-left" id="stars-left"></div>
+<div id="level-display"></div>
 
 <!-- Game Canvas -->
 <canvas id="game"></canvas>
@@ -247,13 +310,49 @@ let dino, stars, clouds, particles, platforms, groundY;
 let score, totalStars, keysDown, gameRunning;
 let animFrame;
 let audioCtx, musicGain, sfxGain, musicStarted = false;
+let currentLevel = 1;
+let fogOffset = 0;
+let lightningTimer = 0;
+let lightningFlash = 0;
+let bats = [];
 
 const DINO_SIZE = 70;
 const STAR_SIZE = 40;
 const GROUND_HEIGHT = 80;
-const TOTAL_STARS_TO_WIN = 10;
 const PLATFORM_COLOR = '#8D6E63';
 const PLATFORM_TOP = '#A1887F';
+
+// Level configurations
+const LEVELS = {
+  1: {
+    totalStars: 10,
+    dinoSpeed: 6,
+    gravity: 0.55,
+    jumpVelocity: -15,
+    maxJumps: 2,
+    platformCount: () => Math.floor(W / 250),
+    platformMinW: 100,
+    platformMaxW: 180,
+    starBobSpeed: [0.02, 0.04],
+    starNearPlatformChance: 0.5,
+    name: 'Level 1',
+    subtitle: 'A sunny adventure!'
+  },
+  2: {
+    totalStars: 10,
+    dinoSpeed: 5.5,
+    gravity: 0.6,
+    jumpVelocity: -14.5,
+    maxJumps: 2,
+    platformCount: () => Math.max(2, Math.floor(W / 320)),
+    platformMinW: 70,
+    platformMaxW: 130,
+    starBobSpeed: [0.03, 0.06],
+    starNearPlatformChance: 0.35,
+    name: 'Level 2',
+    subtitle: 'The Spooky Night! 👻'
+  }
+};
 
 // Mobile detection (must be early since resize() uses it)
 const isMobile = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -283,34 +382,58 @@ function playNote(freq, duration, startTime, gain, type = 'sine') {
   osc.stop(startTime + duration);
 }
 
-// Happy looping background melody
+// Background music — changes per level
 let musicTimeout;
 function playMusic() {
   if (!audioCtx || !gameRunning) return;
   const now = audioCtx.currentTime;
-  // C major happy tune, kid-friendly
-  const melody = [
-    523.25, 587.33, 659.25, 698.46, 783.99, 698.46, 659.25, 587.33,
-    523.25, 493.88, 440.00, 493.88, 523.25, 587.33, 659.25, 523.25,
-    392.00, 440.00, 493.88, 523.25, 587.33, 523.25, 493.88, 440.00,
-    523.25, 659.25, 783.99, 659.25, 523.25, 587.33, 523.25, 493.88
-  ];
-  const noteDur = 0.22;
-  melody.forEach((freq, i) => {
-    playNote(freq, noteDur * 0.9, now + i * noteDur, musicGain, 'triangle');
-  });
-  // Also add a simple bass line
-  const bass = [
-    261.63, 261.63, 329.63, 329.63, 349.23, 349.23, 261.63, 261.63,
-    196.00, 196.00, 220.00, 220.00, 261.63, 261.63, 196.00, 196.00
-  ];
-  const bassDur = noteDur * 2;
-  bass.forEach((freq, i) => {
-    playNote(freq, bassDur * 0.8, now + i * bassDur, musicGain, 'sine');
-  });
-  // Loop
-  const loopLen = melody.length * noteDur * 1000;
-  musicTimeout = setTimeout(playMusic, loopLen - 50);
+
+  if (currentLevel === 1) {
+    // Happy C major tune, kid-friendly
+    const melody = [
+      523.25, 587.33, 659.25, 698.46, 783.99, 698.46, 659.25, 587.33,
+      523.25, 493.88, 440.00, 493.88, 523.25, 587.33, 659.25, 523.25,
+      392.00, 440.00, 493.88, 523.25, 587.33, 523.25, 493.88, 440.00,
+      523.25, 659.25, 783.99, 659.25, 523.25, 587.33, 523.25, 493.88
+    ];
+    const noteDur = 0.22;
+    melody.forEach((freq, i) => {
+      playNote(freq, noteDur * 0.9, now + i * noteDur, musicGain, 'triangle');
+    });
+    const bass = [
+      261.63, 261.63, 329.63, 329.63, 349.23, 349.23, 261.63, 261.63,
+      196.00, 196.00, 220.00, 220.00, 261.63, 261.63, 196.00, 196.00
+    ];
+    const bassDur = noteDur * 2;
+    bass.forEach((freq, i) => {
+      playNote(freq, bassDur * 0.8, now + i * bassDur, musicGain, 'sine');
+    });
+    const loopLen = melody.length * noteDur * 1000;
+    musicTimeout = setTimeout(playMusic, loopLen - 50);
+  } else {
+    // Spooky minor key melody for Level 2
+    const melody = [
+      329.63, 311.13, 293.66, 277.18, 261.63, 277.18, 293.66, 261.63,
+      246.94, 261.63, 293.66, 277.18, 246.94, 233.08, 246.94, 261.63,
+      329.63, 349.23, 329.63, 311.13, 293.66, 277.18, 261.63, 246.94,
+      220.00, 233.08, 246.94, 261.63, 246.94, 233.08, 220.00, 207.65
+    ];
+    const noteDur = 0.28;
+    melody.forEach((freq, i) => {
+      playNote(freq, noteDur * 0.85, now + i * noteDur, musicGain, 'sawtooth');
+    });
+    // Deep ominous bass
+    const bass = [
+      130.81, 130.81, 123.47, 123.47, 116.54, 116.54, 110.00, 110.00,
+      130.81, 130.81, 116.54, 116.54, 110.00, 110.00, 103.83, 103.83
+    ];
+    const bassDur = noteDur * 2;
+    bass.forEach((freq, i) => {
+      playNote(freq, bassDur * 0.9, now + i * bassDur, musicGain, 'sine');
+    });
+    const loopLen = melody.length * noteDur * 1000;
+    musicTimeout = setTimeout(playMusic, loopLen - 50);
+  }
 }
 
 function stopMusic() {
@@ -597,7 +720,11 @@ function starPath(ctx, cx, cy, outerR, innerR, points) {
 }
 
 function drawCloud(x, y, size) {
-  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  if (currentLevel === 1) {
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  } else {
+    ctx.fillStyle = 'rgba(60,60,80,0.6)';
+  }
   ctx.beginPath();
   ctx.arc(x, y, size, 0, Math.PI * 2);
   ctx.arc(x + size * 0.8, y - size * 0.3, size * 0.7, 0, Math.PI * 2);
@@ -607,74 +734,262 @@ function drawCloud(x, y, size) {
 }
 
 function drawGround() {
-  const fullGroundH = H - groundY; // fills to bottom of screen
-  // Grass
-  ctx.fillStyle = '#4CAF50';
-  ctx.fillRect(0, groundY, W, fullGroundH);
-
-  // Grass top highlight
-  ctx.fillStyle = '#66BB6A';
-  ctx.fillRect(0, groundY, W, 8);
-
-  // Dirt
-  ctx.fillStyle = '#795548';
-  ctx.fillRect(0, groundY + 30, W, fullGroundH - 30);
-
-  // Little grass tufts
-  ctx.fillStyle = '#388E3C';
-  for (let i = 0; i < W; i += 40) {
-    ctx.beginPath();
-    ctx.moveTo(i, groundY);
-    ctx.lineTo(i + 5, groundY - 12);
-    ctx.lineTo(i + 10, groundY);
-    ctx.fill();
+  const fullGroundH = H - groundY;
+  if (currentLevel === 1) {
+    ctx.fillStyle = '#4CAF50';
+    ctx.fillRect(0, groundY, W, fullGroundH);
+    ctx.fillStyle = '#66BB6A';
+    ctx.fillRect(0, groundY, W, 8);
+    ctx.fillStyle = '#795548';
+    ctx.fillRect(0, groundY + 30, W, fullGroundH - 30);
+    ctx.fillStyle = '#388E3C';
+    for (let i = 0; i < W; i += 40) {
+      ctx.beginPath();
+      ctx.moveTo(i, groundY);
+      ctx.lineTo(i + 5, groundY - 12);
+      ctx.lineTo(i + 10, groundY);
+      ctx.fill();
+    }
+  } else {
+    // Spooky ground — dark earth with dead grass
+    ctx.fillStyle = '#2E2E1E';
+    ctx.fillRect(0, groundY, W, fullGroundH);
+    ctx.fillStyle = '#3A3A28';
+    ctx.fillRect(0, groundY, W, 8);
+    ctx.fillStyle = '#1A1A10';
+    ctx.fillRect(0, groundY + 30, W, fullGroundH - 30);
+    // Dead/sparse grass tufts
+    ctx.fillStyle = '#4A4A30';
+    for (let i = 0; i < W; i += 60) {
+      ctx.beginPath();
+      ctx.moveTo(i, groundY);
+      ctx.lineTo(i + 3, groundY - 8);
+      ctx.lineTo(i + 6, groundY);
+      ctx.fill();
+    }
   }
 }
 
+// Dead tree for Level 2
+function drawDeadTree(x, baseY, height) {
+  // Trunk
+  ctx.fillStyle = '#2D1B0E';
+  ctx.beginPath();
+  ctx.moveTo(x - 8, baseY);
+  ctx.lineTo(x - 5, baseY - height);
+  ctx.lineTo(x + 5, baseY - height);
+  ctx.lineTo(x + 8, baseY);
+  ctx.fill();
+
+  // Branches
+  ctx.strokeStyle = '#2D1B0E';
+  ctx.lineWidth = 4;
+  // Left branch
+  ctx.beginPath();
+  ctx.moveTo(x, baseY - height * 0.6);
+  ctx.quadraticCurveTo(x - 30, baseY - height * 0.8, x - 45, baseY - height * 0.65);
+  ctx.stroke();
+  // Right branch
+  ctx.beginPath();
+  ctx.moveTo(x, baseY - height * 0.75);
+  ctx.quadraticCurveTo(x + 25, baseY - height * 0.95, x + 40, baseY - height * 0.8);
+  ctx.stroke();
+  // Small twig
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, baseY - height * 0.9);
+  ctx.lineTo(x - 15, baseY - height * 1.05);
+  ctx.stroke();
+}
+
+// Bat for Level 2
+function drawBat(x, y, wingPhase) {
+  ctx.fillStyle = '#1A1A2E';
+  ctx.save();
+  ctx.translate(x, y);
+  // Body
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 6, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Wings
+  const wingY = Math.sin(wingPhase) * 6;
+  ctx.beginPath();
+  ctx.moveTo(-4, 0);
+  ctx.quadraticCurveTo(-14, -8 + wingY, -18, -2 + wingY);
+  ctx.quadraticCurveTo(-12, 2, -4, 0);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(4, 0);
+  ctx.quadraticCurveTo(14, -8 + wingY, 18, -2 + wingY);
+  ctx.quadraticCurveTo(12, 2, 4, 0);
+  ctx.fill();
+  // Eyes
+  ctx.fillStyle = '#FF5252';
+  ctx.beginPath();
+  ctx.arc(-2, -1, 1.2, 0, Math.PI * 2);
+  ctx.arc(2, -1, 1.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawBackground() {
-  // Sky gradient
-  const grad = ctx.createLinearGradient(0, 0, 0, groundY);
-  grad.addColorStop(0, '#87CEEB');
-  grad.addColorStop(1, '#B3E5FC');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, W, groundY);
+  if (currentLevel === 1) {
+    // ---- LEVEL 1: Sunny day ----
+    const grad = ctx.createLinearGradient(0, 0, 0, groundY);
+    grad.addColorStop(0, '#87CEEB');
+    grad.addColorStop(1, '#B3E5FC');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, groundY);
 
-  // Sun
-  ctx.fillStyle = '#FFF176';
-  ctx.beginPath();
-  ctx.arc(W - 100, 80, 50, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#FFEE58';
-  ctx.beginPath();
-  ctx.arc(W - 100, 80, 40, 0, Math.PI * 2);
-  ctx.fill();
+    // Sun
+    ctx.fillStyle = '#FFF176';
+    ctx.beginPath();
+    ctx.arc(W - 100, 80, 50, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#FFEE58';
+    ctx.beginPath();
+    ctx.arc(W - 100, 80, 40, 0, Math.PI * 2);
+    ctx.fill();
 
-  // Clouds
-  clouds.forEach(c => {
-    drawCloud(c.x, c.y, c.size);
-  });
+    // Clouds
+    clouds.forEach(c => drawCloud(c.x, c.y, c.size));
 
-  // Mountains in background
-  ctx.fillStyle = '#81C784';
-  ctx.beginPath();
-  ctx.moveTo(0, groundY);
-  ctx.lineTo(150, groundY - 120);
-  ctx.lineTo(300, groundY);
-  ctx.fill();
+    // Mountains
+    ctx.fillStyle = '#81C784';
+    ctx.beginPath();
+    ctx.moveTo(0, groundY);
+    ctx.lineTo(150, groundY - 120);
+    ctx.lineTo(300, groundY);
+    ctx.fill();
 
-  ctx.fillStyle = '#66BB6A';
-  ctx.beginPath();
-  ctx.moveTo(200, groundY);
-  ctx.lineTo(400, groundY - 160);
-  ctx.lineTo(600, groundY);
-  ctx.fill();
+    ctx.fillStyle = '#66BB6A';
+    ctx.beginPath();
+    ctx.moveTo(200, groundY);
+    ctx.lineTo(400, groundY - 160);
+    ctx.lineTo(600, groundY);
+    ctx.fill();
 
-  ctx.fillStyle = '#81C784';
-  ctx.beginPath();
-  ctx.moveTo(W - 400, groundY);
-  ctx.lineTo(W - 200, groundY - 100);
-  ctx.lineTo(W, groundY);
-  ctx.fill();
+    ctx.fillStyle = '#81C784';
+    ctx.beginPath();
+    ctx.moveTo(W - 400, groundY);
+    ctx.lineTo(W - 200, groundY - 100);
+    ctx.lineTo(W, groundY);
+    ctx.fill();
+
+  } else {
+    // ---- LEVEL 2: Spooky night ----
+    const grad = ctx.createLinearGradient(0, 0, 0, groundY);
+    grad.addColorStop(0, '#0D0D2B');
+    grad.addColorStop(0.4, '#1A1A3E');
+    grad.addColorStop(1, '#2D1B4E');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, groundY);
+
+    // Lightning flash overlay
+    if (lightningFlash > 0) {
+      ctx.fillStyle = `rgba(200, 200, 255, ${lightningFlash * 0.3})`;
+      ctx.fillRect(0, 0, W, H);
+      lightningFlash -= 0.05;
+    }
+
+    // Stars in sky (tiny twinkling dots)
+    ctx.fillStyle = '#fff';
+    for (let i = 0; i < 40; i++) {
+      // Use deterministic positions based on index
+      const sx = ((i * 137 + 50) % W);
+      const sy = ((i * 89 + 20) % (groundY * 0.5));
+      const twinkle = 0.3 + Math.sin(Date.now() / 500 + i * 0.7) * 0.7;
+      ctx.globalAlpha = twinkle;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Eerie moon
+    ctx.fillStyle = '#E8E8C8';
+    ctx.beginPath();
+    ctx.arc(W - 100, 80, 45, 0, Math.PI * 2);
+    ctx.fill();
+    // Moon glow
+    ctx.fillStyle = 'rgba(232, 232, 200, 0.15)';
+    ctx.beginPath();
+    ctx.arc(W - 100, 80, 70, 0, Math.PI * 2);
+    ctx.fill();
+    // Moon craters
+    ctx.fillStyle = 'rgba(180, 180, 160, 0.4)';
+    ctx.beginPath();
+    ctx.arc(W - 112, 72, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(W - 90, 90, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(W - 105, 95, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Dark clouds
+    clouds.forEach(c => drawCloud(c.x, c.y, c.size));
+
+    // Dark mountains / hills
+    ctx.fillStyle = '#1A0E2E';
+    ctx.beginPath();
+    ctx.moveTo(0, groundY);
+    ctx.lineTo(150, groundY - 120);
+    ctx.lineTo(300, groundY);
+    ctx.fill();
+
+    ctx.fillStyle = '#150A28';
+    ctx.beginPath();
+    ctx.moveTo(200, groundY);
+    ctx.lineTo(400, groundY - 160);
+    ctx.lineTo(600, groundY);
+    ctx.fill();
+
+    ctx.fillStyle = '#1A0E2E';
+    ctx.beginPath();
+    ctx.moveTo(W - 400, groundY);
+    ctx.lineTo(W - 200, groundY - 100);
+    ctx.lineTo(W, groundY);
+    ctx.fill();
+
+    // Dead trees
+    drawDeadTree(80, groundY, 110);
+    drawDeadTree(W - 120, groundY, 95);
+    drawDeadTree(W * 0.4, groundY, 130);
+    drawDeadTree(W * 0.7, groundY, 85);
+
+    // Fog at ground level
+    fogOffset += 0.3;
+    ctx.fillStyle = 'rgba(100, 80, 120, 0.2)';
+    for (let fx = -50 + (fogOffset % 100); fx < W + 50; fx += 100) {
+      ctx.beginPath();
+      ctx.ellipse(fx, groundY - 10, 80, 18, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = 'rgba(80, 60, 100, 0.15)';
+    for (let fx = -30 + ((fogOffset * 0.7) % 120); fx < W + 50; fx += 120) {
+      ctx.beginPath();
+      ctx.ellipse(fx, groundY - 25, 60, 14, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Bats
+    bats.forEach(b => {
+      b.x += b.vx;
+      b.phase += 0.15;
+      if (b.x > W + 30) b.x = -30;
+      if (b.x < -30) b.x = W + 30;
+      drawBat(b.x, b.y + Math.sin(b.phase * 0.4) * 8, b.phase);
+    });
+
+    // Random lightning
+    lightningTimer--;
+    if (lightningTimer <= 0) {
+      lightningTimer = 300 + Math.floor(Math.random() * 400);
+      lightningFlash = 1;
+    }
+  }
 }
 
 // --- Particles ---
@@ -716,12 +1031,13 @@ function drawParticles() {
 // --- Platforms ---
 function spawnPlatforms() {
   platforms = [];
-  const count = Math.floor(W / 250);
+  const lvl = LEVELS[currentLevel];
+  const count = lvl.platformCount();
   for (let i = 0; i < count; i++) {
     platforms.push({
       x: 100 + Math.random() * (W - 200),
       y: groundY - 150 - Math.random() * (groundY - 300),
-      w: 100 + Math.random() * 80,
+      w: lvl.platformMinW + Math.random() * (lvl.platformMaxW - lvl.platformMinW),
       h: 18
     });
   }
@@ -729,49 +1045,68 @@ function spawnPlatforms() {
 
 function drawPlatforms() {
   platforms.forEach(p => {
-    // Shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.1)';
-    ctx.fillRect(p.x + 4, p.y + 4, p.w, p.h);
-    // Main platform
-    ctx.fillStyle = PLATFORM_COLOR;
-    ctx.fillRect(p.x, p.y, p.w, p.h);
-    // Top highlight
-    ctx.fillStyle = PLATFORM_TOP;
-    ctx.fillRect(p.x, p.y, p.w, 5);
-    // Grass on top
-    ctx.fillStyle = '#66BB6A';
-    ctx.fillRect(p.x, p.y - 3, p.w, 5);
-    // Little grass tufts on platform
-    ctx.fillStyle = '#388E3C';
-    for (let gx = p.x + 8; gx < p.x + p.w - 8; gx += 18) {
-      ctx.beginPath();
-      ctx.moveTo(gx, p.y - 3);
-      ctx.lineTo(gx + 3, p.y - 11);
-      ctx.lineTo(gx + 6, p.y - 3);
-      ctx.fill();
+    if (currentLevel === 1) {
+      ctx.fillStyle = 'rgba(0,0,0,0.1)';
+      ctx.fillRect(p.x + 4, p.y + 4, p.w, p.h);
+      ctx.fillStyle = PLATFORM_COLOR;
+      ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.fillStyle = PLATFORM_TOP;
+      ctx.fillRect(p.x, p.y, p.w, 5);
+      ctx.fillStyle = '#66BB6A';
+      ctx.fillRect(p.x, p.y - 3, p.w, 5);
+      ctx.fillStyle = '#388E3C';
+      for (let gx = p.x + 8; gx < p.x + p.w - 8; gx += 18) {
+        ctx.beginPath();
+        ctx.moveTo(gx, p.y - 3);
+        ctx.lineTo(gx + 3, p.y - 11);
+        ctx.lineTo(gx + 6, p.y - 3);
+        ctx.fill();
+      }
+    } else {
+      // Spooky dark stone platforms
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.fillRect(p.x + 4, p.y + 4, p.w, p.h);
+      ctx.fillStyle = '#3E2723';
+      ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.fillStyle = '#4E342E';
+      ctx.fillRect(p.x, p.y, p.w, 4);
+      // Cracks
+      ctx.strokeStyle = '#2A1A14';
+      ctx.lineWidth = 1;
+      for (let cx = p.x + 15; cx < p.x + p.w - 10; cx += 30) {
+        ctx.beginPath();
+        ctx.moveTo(cx, p.y + 2);
+        ctx.lineTo(cx + 5, p.y + p.h - 2);
+        ctx.stroke();
+      }
+      // Moss
+      ctx.fillStyle = 'rgba(50, 80, 40, 0.4)';
+      ctx.fillRect(p.x, p.y - 2, p.w, 3);
     }
   });
 }
 
 // --- Stars ---
 function spawnStar() {
-  // 50% of stars spawn near platforms so they're reachable
-  if (platforms.length > 0 && Math.random() < 0.5) {
+  const lvl = LEVELS[currentLevel];
+  const bobSpeedMin = lvl.starBobSpeed[0];
+  const bobSpeedRange = lvl.starBobSpeed[1] - lvl.starBobSpeed[0];
+
+  if (platforms.length > 0 && Math.random() < lvl.starNearPlatformChance) {
     const p = platforms[Math.floor(Math.random() * platforms.length)];
     stars.push({
       x: p.x + Math.random() * p.w,
       y: p.y - 40 - Math.random() * 60,
       phase: Math.random() * Math.PI * 2,
-      bobSpeed: 0.02 + Math.random() * 0.02,
+      bobSpeed: bobSpeedMin + Math.random() * bobSpeedRange,
       bobAmount: 10 + Math.random() * 8
     });
   } else {
-    // Spawn in lower/mid area reachable by double jump
     stars.push({
       x: Math.random() * (W - 100) + 50,
       y: groundY - 80 - Math.random() * (groundY * 0.45),
       phase: Math.random() * Math.PI * 2,
-      bobSpeed: 0.02 + Math.random() * 0.02,
+      bobSpeed: bobSpeedMin + Math.random() * bobSpeedRange,
       bobAmount: 12 + Math.random() * 10
     });
   }
@@ -779,6 +1114,8 @@ function spawnStar() {
 
 // --- Game Logic ---
 function initGame() {
+  const lvl = LEVELS[currentLevel];
+
   dino = {
     x: W / 2,
     y: groundY - DINO_SIZE * 0.5,
@@ -786,40 +1123,63 @@ function initGame() {
     vy: 0,
     onGround: true,
     facingRight: true,
-    speed: 6,
-    jumpsLeft: 2,   // double jump!
-    maxJumps: 2
+    speed: lvl.dinoSpeed,
+    jumpsLeft: lvl.maxJumps,
+    maxJumps: lvl.maxJumps
   };
 
   stars = [];
   clouds = [];
   particles = [];
   platforms = [];
+  bats = [];
   score = 0;
-  totalStars = TOTAL_STARS_TO_WIN;
+  totalStars = lvl.totalStars;
   keysDown = {};
+  fogOffset = 0;
+  lightningTimer = 300;
+  lightningFlash = 0;
 
   spawnPlatforms();
+
+  // Update page background to match level
+  document.body.style.background = currentLevel === 1 ? '#87CEEB' : '#0D0D2B';
 
   // Spawn initial stars (3 at a time)
   for (let i = 0; i < 3; i++) spawnStar();
 
   // Clouds
-  for (let i = 0; i < 5; i++) {
+  const cloudCount = currentLevel === 1 ? 5 : 7;
+  for (let i = 0; i < cloudCount; i++) {
     clouds.push({
       x: Math.random() * W,
       y: 30 + Math.random() * 100,
       size: 20 + Math.random() * 30,
-      speed: 0.2 + Math.random() * 0.5
+      speed: currentLevel === 1 ? (0.2 + Math.random() * 0.5) : (0.3 + Math.random() * 0.8)
     });
+  }
+
+  // Bats for Level 2
+  if (currentLevel === 2) {
+    for (let i = 0; i < 4; i++) {
+      bats.push({
+        x: Math.random() * W,
+        y: 40 + Math.random() * 80,
+        vx: (Math.random() < 0.5 ? 1 : -1) * (1 + Math.random() * 1.5),
+        phase: Math.random() * Math.PI * 2
+      });
+    }
   }
 }
 
 function startGame() {
+  currentLevel = 1;
   document.getElementById('start-screen').style.display = 'none';
   document.getElementById('win-screen').style.display = 'none';
+  document.getElementById('level-screen').style.display = 'none';
   document.getElementById('score-display').style.display = 'block';
   document.getElementById('stars-left').style.display = 'block';
+  document.getElementById('level-display').style.display = 'block';
 
   resize();
   initGame();
@@ -842,15 +1202,47 @@ function winGame() {
   playSfxWin();
   document.getElementById('score-display').style.display = 'none';
   document.getElementById('stars-left').style.display = 'none';
+  document.getElementById('level-display').style.display = 'none';
 
-  const msgs = [
-    "Rhaki & Rho, you're star catchers! ⭐",
-    "Rhaki & Rho's Yoshi is so happy! 🦖",
-    "Amazing job, Rhaki & Rho! 🌟",
-    "Rhaki & Rho did it! Hooray! 🎊"
-  ];
-  document.getElementById('win-msg').textContent = msgs[Math.floor(Math.random() * msgs.length)];
-  document.getElementById('win-screen').style.display = 'flex';
+  if (currentLevel === 1) {
+    // Show Level 2 transition screen
+    const levelScreen = document.getElementById('level-screen');
+    levelScreen.style.background = 'linear-gradient(180deg, #0D0D2B 0%, #2D1B4E 50%, #1A0E2E 100%)';
+    document.getElementById('level-emoji').textContent = '🦖👻';
+    document.getElementById('level-title').textContent = 'Level 2: Spooky Night!';
+    document.getElementById('level-subtitle').textContent = 'It\'s getting dark and mysterious... Can you find all the stars?';
+    levelScreen.style.display = 'flex';
+  } else {
+    // Final win — beat both levels!
+    const msgs = [
+      "Rhaki & Rho, you're super star catchers! ⭐🏆",
+      "Rhaki & Rho conquered the spooky night! 🦖🌟",
+      "Amazing job, Rhaki & Rho! Both levels beaten! 🎊",
+      "Rhaki & Rho are champions! Hooray! 🏆🎉"
+    ];
+    document.getElementById('win-msg').textContent = msgs[Math.floor(Math.random() * msgs.length)];
+    document.getElementById('win-screen').style.display = 'flex';
+  }
+}
+
+function startNextLevel() {
+  document.getElementById('level-screen').style.display = 'none';
+  currentLevel = 2;
+  document.getElementById('score-display').style.display = 'block';
+  document.getElementById('stars-left').style.display = 'block';
+  document.getElementById('level-display').style.display = 'block';
+
+  resize();
+  initGame();
+  gameRunning = true;
+
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  stopMusic();
+  musicStarted = true;
+  playMusic();
+
+  if (animFrame) cancelAnimationFrame(animFrame);
+  loop();
 }
 
 function update() {
@@ -873,7 +1265,7 @@ function update() {
   // Jump (double jump supported!)
   if (keysDown['ArrowUp'] || keysDown[' '] || keysDown['up']) {
     if (!dino._jumpHeld && dino.jumpsLeft > 0) {
-      dino.vy = -15;
+      dino.vy = LEVELS[currentLevel].jumpVelocity;
       dino.onGround = false;
       dino.jumpsLeft--;
       dino._jumpHeld = true;
@@ -884,7 +1276,7 @@ function update() {
   }
 
   // Gravity
-  dino.vy += 0.55;
+  dino.vy += LEVELS[currentLevel].gravity;
   dino.x += dino.vx;
   dino.y += dino.vy;
 
@@ -979,6 +1371,7 @@ function draw() {
   document.getElementById('score-display').textContent = `⭐ ${score} / ${totalStars}`;
   document.getElementById('stars-left').textContent =
     `Catch ${totalStars - score} more star${totalStars - score !== 1 ? 's' : ''}!`;
+  document.getElementById('level-display').textContent = LEVELS[currentLevel].name;
 }
 
 function loop() {
