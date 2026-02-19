@@ -16,15 +16,15 @@
   html, body {
     width: 100%;
     height: 100%;
-    height: 100dvh;          /* dynamic viewport height — shrinks with URL bar */
+    height: 100dvh;
     overflow: hidden;
     background: #87CEEB;
     font-family: 'Comic Sans MS', 'Chalkboard SE', cursive;
     user-select: none;
     -webkit-user-select: none;
-    touch-action: none;       /* prevent all browser touch gestures globally */
-    overscroll-behavior: none; /* prevent pull-to-refresh / overscroll bounce */
-    position: fixed;          /* prevents iOS Safari rubber-banding */
+    touch-action: none;
+    overscroll-behavior: none;
+    position: fixed;
     inset: 0;
   }
 
@@ -35,7 +35,7 @@
     left: 0;
   }
 
-  #start-screen, #win-screen {
+  #start-screen, #win-screen, #gameover-screen {
     position: absolute;
     top: 0; left: 0;
     width: 100%; height: 100%;
@@ -43,6 +43,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    text-align: center;
     background: linear-gradient(180deg, #87CEEB 0%, #98FB98 100%);
     z-index: 10;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
@@ -51,7 +52,12 @@
   }
 
   #win-screen { display: none; }
-  #level-screen { display: none; }
+  #gameover-screen {
+    display: none;
+    background: linear-gradient(180deg, #1a0000 0%, #4a0000 50%, #2a0000 100%);
+  }
+  #gameover-screen h1 { color: #FF5252; text-shadow: 3px 3px 8px rgba(0,0,0,0.7); }
+  #gameover-screen .win-msg { color: #ffcccc; }
 
   #level-screen {
     position: absolute;
@@ -61,6 +67,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    text-align: center;
     z-index: 10;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     overflow-y: auto;
@@ -92,7 +99,6 @@
     50% { transform: scale(1.05); }
   }
 
-  /* Level indicator during gameplay */
   #level-display {
     position: absolute;
     top: 15px;
@@ -101,6 +107,17 @@
     color: #fff;
     text-shadow: 2px 2px 0 rgba(0,0,0,0.3);
     z-index: 5;
+  }
+
+  #lives-display {
+    position: absolute;
+    top: 15px;
+    left: 20px;
+    font-size: 24px;
+    color: #FF5252;
+    text-shadow: 2px 2px 0 rgba(0,0,0,0.3);
+    z-index: 5;
+    display: none;
   }
 
   h1 {
@@ -123,6 +140,7 @@
   .big-dino {
     font-size: 120px;
     margin-bottom: 20px;
+    text-align: center;
   }
 
   button {
@@ -177,11 +195,14 @@
     font-size: 28px;
     color: #333;
     margin-bottom: 20px;
+    text-align: center;
+    padding: 0 20px;
   }
 
   .confetti {
     font-size: 60px;
     margin-bottom: 20px;
+    text-align: center;
   }
 
   /* ===== Mobile on-screen controls ===== */
@@ -254,6 +275,7 @@
     .level-title { font-size: 38px; }
     .level-subtitle { font-size: 18px; }
     #level-display { font-size: 16px; top: 10px; right: 10px; }
+    #lives-display { font-size: 18px; top: 10px; left: 10px; }
   }
 </style>
 </head>
@@ -286,10 +308,19 @@
   <button onclick="startGame()">Play Again!</button>
 </div>
 
+<!-- Game Over Screen -->
+<div id="gameover-screen">
+  <div class="big-dino">💥🦖</div>
+  <h1>Game Over!</h1>
+  <p class="win-msg" id="gameover-msg">Mr. Lava wins this time...</p>
+  <button onclick="startGame()">Try Again!</button>
+</div>
+
 <!-- Game HUD -->
 <div id="score-display"></div>
 <div class="stars-left" id="stars-left"></div>
 <div id="level-display"></div>
+<div id="lives-display"></div>
 
 <!-- Game Canvas -->
 <canvas id="game"></canvas>
@@ -311,16 +342,25 @@ let score, totalStars, keysDown, gameRunning;
 let animFrame;
 let audioCtx, musicGain, sfxGain, musicStarted = false;
 let currentLevel = 1;
+let nextLevel = 2; // tracks what the next level will be
 let fogOffset = 0;
 let lightningTimer = 0;
 let lightningFlash = 0;
 let bats = [];
+let bubbles = []; // Level 3 underwater bubbles
+let seaweed = []; // Level 3 seaweed positions
+let boss = null; // Level 4 boss
+let fireballs = []; // Level 4 fireballs
+let lives = 3;
+let invincibleTimer = 0; // brief invincibility after hit
+let bossFireTimer = 0;
 
 const DINO_SIZE = 70;
 const STAR_SIZE = 40;
 const GROUND_HEIGHT = 80;
 const PLATFORM_COLOR = '#8D6E63';
 const PLATFORM_TOP = '#A1887F';
+const MAX_LEVEL = 4;
 
 // Level configurations
 const LEVELS = {
@@ -336,7 +376,9 @@ const LEVELS = {
     starBobSpeed: [0.02, 0.04],
     starNearPlatformChance: 0.5,
     name: 'Level 1',
-    subtitle: 'A sunny adventure!'
+    subtitle: 'A sunny adventure!',
+    collectEmoji: '⭐',
+    collectName: 'star'
   },
   2: {
     totalStars: 10,
@@ -350,14 +392,48 @@ const LEVELS = {
     starBobSpeed: [0.03, 0.06],
     starNearPlatformChance: 0.35,
     name: 'Level 2',
-    subtitle: 'The Spooky Night! 👻'
+    subtitle: 'The Spooky Night! 👻',
+    collectEmoji: '⭐',
+    collectName: 'star'
+  },
+  3: {
+    totalStars: 10,
+    dinoSpeed: 4.5,
+    gravity: 0.35,
+    jumpVelocity: -12,
+    maxJumps: 2,
+    platformCount: () => Math.max(3, Math.floor(W / 260)),
+    platformMinW: 60,
+    platformMaxW: 120,
+    starBobSpeed: [0.03, 0.07],
+    starNearPlatformChance: 0.3,
+    name: 'Level 3',
+    subtitle: 'Deep Sea Dive! 🐠',
+    collectEmoji: '⭐',
+    collectName: 'star'
+  },
+  4: {
+    totalStars: 10,
+    dinoSpeed: 6,
+    gravity: 0.55,
+    jumpVelocity: -15,
+    maxJumps: 2,
+    platformCount: () => Math.max(3, Math.floor(W / 250)),
+    platformMinW: 80,
+    platformMaxW: 150,
+    starBobSpeed: [0.02, 0.04],
+    starNearPlatformChance: 0.4,
+    name: 'BOSS FIGHT!',
+    subtitle: 'Defeat Mr. Lava! 🌋',
+    collectEmoji: '💧',
+    collectName: 'water jug'
   }
 };
 
-// Mobile detection (must be early since resize() uses it)
+// Mobile detection
 const isMobile = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 
-// ============ AUDIO ENGINE (Web Audio API, no files needed) ============
+// ============ AUDIO ENGINE ============
 function initAudio() {
   if (audioCtx) return;
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -382,64 +458,45 @@ function playNote(freq, duration, startTime, gain, type = 'sine') {
   osc.stop(startTime + duration);
 }
 
-// Background music — changes per level
 let musicTimeout;
 function playMusic() {
   if (!audioCtx || !gameRunning) return;
   const now = audioCtx.currentTime;
 
   if (currentLevel === 1) {
-    // Happy C major tune, kid-friendly
-    const melody = [
-      523.25, 587.33, 659.25, 698.46, 783.99, 698.46, 659.25, 587.33,
-      523.25, 493.88, 440.00, 493.88, 523.25, 587.33, 659.25, 523.25,
-      392.00, 440.00, 493.88, 523.25, 587.33, 523.25, 493.88, 440.00,
-      523.25, 659.25, 783.99, 659.25, 523.25, 587.33, 523.25, 493.88
-    ];
+    const melody = [523.25,587.33,659.25,698.46,783.99,698.46,659.25,587.33,523.25,493.88,440.00,493.88,523.25,587.33,659.25,523.25,392.00,440.00,493.88,523.25,587.33,523.25,493.88,440.00,523.25,659.25,783.99,659.25,523.25,587.33,523.25,493.88];
     const noteDur = 0.22;
-    melody.forEach((freq, i) => {
-      playNote(freq, noteDur * 0.9, now + i * noteDur, musicGain, 'triangle');
-    });
-    const bass = [
-      261.63, 261.63, 329.63, 329.63, 349.23, 349.23, 261.63, 261.63,
-      196.00, 196.00, 220.00, 220.00, 261.63, 261.63, 196.00, 196.00
-    ];
-    const bassDur = noteDur * 2;
-    bass.forEach((freq, i) => {
-      playNote(freq, bassDur * 0.8, now + i * bassDur, musicGain, 'sine');
-    });
-    const loopLen = melody.length * noteDur * 1000;
-    musicTimeout = setTimeout(playMusic, loopLen - 50);
-  } else {
-    // Spooky minor key melody for Level 2
-    const melody = [
-      329.63, 311.13, 293.66, 277.18, 261.63, 277.18, 293.66, 261.63,
-      246.94, 261.63, 293.66, 277.18, 246.94, 233.08, 246.94, 261.63,
-      329.63, 349.23, 329.63, 311.13, 293.66, 277.18, 261.63, 246.94,
-      220.00, 233.08, 246.94, 261.63, 246.94, 233.08, 220.00, 207.65
-    ];
+    melody.forEach((f,i) => playNote(f, noteDur*0.9, now+i*noteDur, musicGain, 'triangle'));
+    const bass = [261.63,261.63,329.63,329.63,349.23,349.23,261.63,261.63,196.00,196.00,220.00,220.00,261.63,261.63,196.00,196.00];
+    bass.forEach((f,i) => playNote(f, noteDur*1.6, now+i*noteDur*2, musicGain, 'sine'));
+    musicTimeout = setTimeout(playMusic, melody.length * noteDur * 1000 - 50);
+  } else if (currentLevel === 2) {
+    const melody = [329.63,311.13,293.66,277.18,261.63,277.18,293.66,261.63,246.94,261.63,293.66,277.18,246.94,233.08,246.94,261.63,329.63,349.23,329.63,311.13,293.66,277.18,261.63,246.94,220.00,233.08,246.94,261.63,246.94,233.08,220.00,207.65];
     const noteDur = 0.28;
-    melody.forEach((freq, i) => {
-      playNote(freq, noteDur * 0.85, now + i * noteDur, musicGain, 'sawtooth');
-    });
-    // Deep ominous bass
-    const bass = [
-      130.81, 130.81, 123.47, 123.47, 116.54, 116.54, 110.00, 110.00,
-      130.81, 130.81, 116.54, 116.54, 110.00, 110.00, 103.83, 103.83
-    ];
-    const bassDur = noteDur * 2;
-    bass.forEach((freq, i) => {
-      playNote(freq, bassDur * 0.9, now + i * bassDur, musicGain, 'sine');
-    });
-    const loopLen = melody.length * noteDur * 1000;
-    musicTimeout = setTimeout(playMusic, loopLen - 50);
+    melody.forEach((f,i) => playNote(f, noteDur*0.85, now+i*noteDur, musicGain, 'sawtooth'));
+    const bass = [130.81,130.81,123.47,123.47,116.54,116.54,110.00,110.00,130.81,130.81,116.54,116.54,110.00,110.00,103.83,103.83];
+    bass.forEach((f,i) => playNote(f, noteDur*1.8, now+i*noteDur*2, musicGain, 'sine'));
+    musicTimeout = setTimeout(playMusic, melody.length * noteDur * 1000 - 50);
+  } else if (currentLevel === 3) {
+    // Dreamy underwater melody — gentle, floaty
+    const melody = [392.00,440.00,493.88,523.25,493.88,440.00,392.00,349.23,329.63,349.23,392.00,440.00,493.88,523.25,587.33,523.25,493.88,440.00,392.00,349.23,329.63,293.66,329.63,349.23,392.00,440.00,493.88,440.00,392.00,349.23,329.63,349.23];
+    const noteDur = 0.3;
+    melody.forEach((f,i) => playNote(f, noteDur*0.9, now+i*noteDur, musicGain, 'sine'));
+    const bass = [196.00,196.00,220.00,220.00,246.94,246.94,261.63,261.63,196.00,196.00,174.61,174.61,164.81,164.81,174.61,174.61];
+    bass.forEach((f,i) => playNote(f, noteDur*1.8, now+i*noteDur*2, musicGain, 'sine'));
+    musicTimeout = setTimeout(playMusic, melody.length * noteDur * 1000 - 50);
+  } else {
+    // Boss fight — intense, fast, aggressive
+    const melody = [220.00,261.63,220.00,293.66,220.00,261.63,220.00,196.00,233.08,277.18,233.08,311.13,233.08,277.18,233.08,207.65,220.00,329.63,293.66,261.63,246.94,233.08,220.00,196.00,220.00,329.63,293.66,261.63,246.94,233.08,220.00,207.65];
+    const noteDur = 0.16;
+    melody.forEach((f,i) => playNote(f, noteDur*0.8, now+i*noteDur, musicGain, 'square'));
+    const bass = [110.00,110.00,116.54,116.54,123.47,123.47,110.00,110.00,103.83,103.83,110.00,110.00,116.54,116.54,103.83,103.83];
+    bass.forEach((f,i) => playNote(f, noteDur*1.6, now+i*noteDur*2, musicGain, 'sawtooth'));
+    musicTimeout = setTimeout(playMusic, melody.length * noteDur * 1000 - 50);
   }
 }
 
-function stopMusic() {
-  clearTimeout(musicTimeout);
-  musicStarted = false;
-}
+function stopMusic() { clearTimeout(musicTimeout); musicStarted = false; }
 
 function playSfxCollect() {
   if (!audioCtx) return;
@@ -459,1071 +516,929 @@ function playSfxJump() {
   osc.frequency.exponentialRampToValueAtTime(600, now + 0.15);
   g.gain.setValueAtTime(0.2, now);
   g.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
-  osc.connect(g);
-  g.connect(sfxGain);
-  osc.start(now);
-  osc.stop(now + 0.2);
+  osc.connect(g); g.connect(sfxGain);
+  osc.start(now); osc.stop(now + 0.2);
 }
 
 function playSfxWin() {
   if (!audioCtx) return;
   const now = audioCtx.currentTime;
-  [523.25, 659.25, 783.99, 1046.50].forEach((f, i) => {
-    playNote(f, 0.3, now + i * 0.15, sfxGain, 'triangle');
-  });
+  [523.25,659.25,783.99,1046.50].forEach((f,i) => playNote(f, 0.3, now+i*0.15, sfxGain, 'triangle'));
 }
 
+function playSfxHit() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(200, now);
+  osc.frequency.exponentialRampToValueAtTime(50, now + 0.3);
+  g.gain.setValueAtTime(0.4, now);
+  g.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+  osc.connect(g); g.connect(sfxGain);
+  osc.start(now); osc.stop(now + 0.3);
+}
+
+function playSfxGameOver() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  [293.66,261.63,220.00,164.81].forEach((f,i) => playNote(f, 0.4, now+i*0.25, sfxGain, 'sawtooth'));
+}
+
+// ============ VIEWPORT ============
 function getViewportSize() {
-  // visualViewport gives the *actual* visible area on mobile
-  // (accounts for URL bar, on-screen keyboard, pinch zoom, etc.)
-  if (window.visualViewport) {
-    return {
-      w: Math.round(window.visualViewport.width),
-      h: Math.round(window.visualViewport.height)
-    };
-  }
-  // Fallback for older browsers
-  return {
-    w: window.innerWidth,
-    h: window.innerHeight
-  };
+  if (window.visualViewport) return { w: Math.round(window.visualViewport.width), h: Math.round(window.visualViewport.height) };
+  return { w: window.innerWidth, h: window.innerHeight };
 }
 
 function resize() {
   const vp = getViewportSize();
   W = canvas.width = vp.w;
   H = canvas.height = vp.h;
-  // On mobile, raise the ground so on-screen controls sit below it
   const mobileExtra = isMobile ? 90 : 0;
   groundY = H - GROUND_HEIGHT - mobileExtra;
 }
 
-// Listen on visualViewport (fires when URL bar hides/shows, orientation change, etc.)
-if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', resize);
-} else {
-  window.addEventListener('resize', resize);
-}
-// Also handle orientation changes with a small delay (some browsers need it)
-window.addEventListener('orientationchange', () => {
-  setTimeout(resize, 150);
-  setTimeout(resize, 500);
-});
+if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
+else window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => { setTimeout(resize, 150); setTimeout(resize, 500); });
 resize();
-// Delayed resize to catch Dropbox / in-app browser late layout
 setTimeout(resize, 300);
 setTimeout(resize, 1000);
 
-// --- Drawing helpers ---
-// Red Yoshi-inspired character
+// ============ DRAWING HELPERS ============
 const YOSHI_RED = '#E53935';
 const YOSHI_RED_DARK = '#B71C1C';
 const YOSHI_RED_LIGHT = '#EF5350';
 const YOSHI_WHITE = '#FFFFFF';
-const YOSHI_SHELL = '#E53935';
 const YOSHI_BOOT = '#FF8F00';
 const YOSHI_BOOT_DARK = '#E65100';
 
 function drawDino(x, y, size, facingRight) {
   ctx.save();
   ctx.translate(x, y);
-  if (!facingRight) {
-    ctx.scale(-1, 1);
+  if (!facingRight) ctx.scale(-1, 1);
+
+  // Flash when invincible
+  if (invincibleTimer > 0 && Math.floor(invincibleTimer / 4) % 2 === 0) {
+    ctx.globalAlpha = 0.4;
   }
 
-  // === Tail ===
+  // Tail
   ctx.fillStyle = YOSHI_RED;
   ctx.beginPath();
-  ctx.moveTo(-size * 0.3, 0);
-  ctx.quadraticCurveTo(-size * 0.75, -size * 0.05, -size * 0.7, -size * 0.2);
-  ctx.quadraticCurveTo(-size * 0.65, -size * 0.3, -size * 0.55, -size * 0.22);
-  ctx.quadraticCurveTo(-size * 0.5, -size * 0.1, -size * 0.25, size * 0.1);
+  ctx.moveTo(-size*0.3, 0);
+  ctx.quadraticCurveTo(-size*0.75, -size*0.05, -size*0.7, -size*0.2);
+  ctx.quadraticCurveTo(-size*0.65, -size*0.3, -size*0.55, -size*0.22);
+  ctx.quadraticCurveTo(-size*0.5, -size*0.1, -size*0.25, size*0.1);
   ctx.fill();
-
-  // === Body ===
+  // Body
   ctx.fillStyle = YOSHI_RED;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, size * 0.38, size * 0.42, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // White belly (Yoshi's iconic white front)
+  ctx.beginPath(); ctx.ellipse(0, 0, size*0.38, size*0.42, 0, 0, Math.PI*2); ctx.fill();
+  // White belly
   ctx.fillStyle = YOSHI_WHITE;
-  ctx.beginPath();
-  ctx.ellipse(size * 0.08, size * 0.05, size * 0.2, size * 0.32, 0.1, 0, Math.PI * 2);
-  ctx.fill();
-
-  // === Shell / saddle on back ===
+  ctx.beginPath(); ctx.ellipse(size*0.08, size*0.05, size*0.2, size*0.32, 0.1, 0, Math.PI*2); ctx.fill();
+  // Shell
   ctx.fillStyle = YOSHI_RED_DARK;
-  ctx.beginPath();
-  ctx.ellipse(-size * 0.05, -size * 0.2, size * 0.22, size * 0.12, -0.2, 0, Math.PI * 2);
-  ctx.fill();
-  // Shell rim (white like Yoshi's shell edge)
+  ctx.beginPath(); ctx.ellipse(-size*0.05, -size*0.2, size*0.22, size*0.12, -0.2, 0, Math.PI*2); ctx.fill();
   ctx.fillStyle = YOSHI_WHITE;
-  ctx.beginPath();
-  ctx.ellipse(-size * 0.05, -size * 0.27, size * 0.18, size * 0.05, -0.2, 0, Math.PI * 2);
-  ctx.fill();
-
-  // === Head ===
-  // Back of head (red)
+  ctx.beginPath(); ctx.ellipse(-size*0.05, -size*0.27, size*0.18, size*0.05, -0.2, 0, Math.PI*2); ctx.fill();
+  // Head
   ctx.fillStyle = YOSHI_RED;
-  ctx.beginPath();
-  ctx.ellipse(size * 0.2, -size * 0.4, size * 0.24, size * 0.24, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Big round nose / snout (Yoshi's signature)
+  ctx.beginPath(); ctx.ellipse(size*0.2, -size*0.4, size*0.24, size*0.24, 0, 0, Math.PI*2); ctx.fill();
+  // Snout
   ctx.fillStyle = YOSHI_RED_LIGHT;
-  ctx.beginPath();
-  ctx.ellipse(size * 0.45, -size * 0.32, size * 0.18, size * 0.15, 0.15, 0, Math.PI * 2);
-  ctx.fill();
-  // Nostril dot
+  ctx.beginPath(); ctx.ellipse(size*0.45, -size*0.32, size*0.18, size*0.15, 0.15, 0, Math.PI*2); ctx.fill();
   ctx.fillStyle = YOSHI_RED_DARK;
-  ctx.beginPath();
-  ctx.arc(size * 0.55, -size * 0.33, size * 0.03, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Cheek patch (rosy)
-  ctx.fillStyle = 'rgba(255, 138, 128, 0.4)';
-  ctx.beginPath();
-  ctx.ellipse(size * 0.32, -size * 0.24, size * 0.08, size * 0.06, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Eye (big, white, with pupil — Yoshi style)
+  ctx.beginPath(); ctx.arc(size*0.55, -size*0.33, size*0.03, 0, Math.PI*2); ctx.fill();
+  // Cheek
+  ctx.fillStyle = 'rgba(255,138,128,0.4)';
+  ctx.beginPath(); ctx.ellipse(size*0.32, -size*0.24, size*0.08, size*0.06, 0, 0, Math.PI*2); ctx.fill();
+  // Eye
   ctx.fillStyle = YOSHI_WHITE;
-  ctx.beginPath();
-  ctx.ellipse(size * 0.3, -size * 0.48, size * 0.1, size * 0.12, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Eye outline
-  ctx.strokeStyle = '#333';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.ellipse(size * 0.3, -size * 0.48, size * 0.1, size * 0.12, 0, 0, Math.PI * 2);
-  ctx.stroke();
-  // Pupil
+  ctx.beginPath(); ctx.ellipse(size*0.3, -size*0.48, size*0.1, size*0.12, 0, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.ellipse(size*0.3, -size*0.48, size*0.1, size*0.12, 0, 0, Math.PI*2); ctx.stroke();
   ctx.fillStyle = '#1B5E20';
-  ctx.beginPath();
-  ctx.ellipse(size * 0.33, -size * 0.47, size * 0.055, size * 0.07, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Eye highlight
+  ctx.beginPath(); ctx.ellipse(size*0.33, -size*0.47, size*0.055, size*0.07, 0, 0, Math.PI*2); ctx.fill();
   ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.arc(size * 0.35, -size * 0.5, size * 0.025, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Head crest / spike (like Yoshi's head fin)
+  ctx.beginPath(); ctx.arc(size*0.35, -size*0.5, size*0.025, 0, Math.PI*2); ctx.fill();
+  // Crest
   ctx.fillStyle = YOSHI_RED;
   ctx.beginPath();
-  ctx.moveTo(size * 0.05, -size * 0.55);
-  ctx.quadraticCurveTo(size * 0.0, -size * 0.75, size * 0.15, -size * 0.7);
-  ctx.quadraticCurveTo(size * 0.2, -size * 0.62, size * 0.15, -size * 0.5);
+  ctx.moveTo(size*0.05, -size*0.55);
+  ctx.quadraticCurveTo(size*0.0, -size*0.75, size*0.15, -size*0.7);
+  ctx.quadraticCurveTo(size*0.2, -size*0.62, size*0.15, -size*0.5);
   ctx.fill();
-
   // Smile
-  ctx.strokeStyle = YOSHI_RED_DARK;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(size * 0.42, -size * 0.24, size * 0.08, 0.1, Math.PI * 0.7);
-  ctx.stroke();
-
-  // === Arms (small, reaching forward, Yoshi style) ===
-  ctx.fillStyle = YOSHI_RED;
-  ctx.save();
-  ctx.translate(size * 0.22, -size * 0.05);
-  ctx.rotate(0.4 + Math.sin(Date.now() / 200) * 0.25);
+  ctx.strokeStyle = YOSHI_RED_DARK; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(size*0.42, -size*0.24, size*0.08, 0.1, Math.PI*0.7); ctx.stroke();
   // Arm
-  ctx.beginPath();
-  ctx.ellipse(size * 0.1, 0, size * 0.12, size * 0.05, 0.3, 0, Math.PI * 2);
-  ctx.fill();
-  // White glove / hand
-  ctx.fillStyle = YOSHI_WHITE;
-  ctx.beginPath();
-  ctx.arc(size * 0.2, size * 0.02, size * 0.045, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  // === Legs ===
-  // Left leg
   ctx.fillStyle = YOSHI_RED;
-  ctx.beginPath();
-  ctx.ellipse(-size * 0.12, size * 0.35, size * 0.08, size * 0.14, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Right leg
-  ctx.beginPath();
-  ctx.ellipse(size * 0.12, size * 0.35, size * 0.08, size * 0.14, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // === Boots (orange like Yoshi's) ===
-  // Left boot
-  ctx.fillStyle = YOSHI_BOOT;
-  ctx.beginPath();
-  ctx.ellipse(-size * 0.14, size * 0.48, size * 0.12, size * 0.06, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Boot sole
-  ctx.fillStyle = YOSHI_BOOT_DARK;
-  ctx.beginPath();
-  ctx.ellipse(-size * 0.14, size * 0.52, size * 0.12, size * 0.03, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Right boot
-  ctx.fillStyle = YOSHI_BOOT;
-  ctx.beginPath();
-  ctx.ellipse(size * 0.14, size * 0.48, size * 0.12, size * 0.06, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Boot sole
-  ctx.fillStyle = YOSHI_BOOT_DARK;
-  ctx.beginPath();
-  ctx.ellipse(size * 0.14, size * 0.52, size * 0.12, size * 0.03, 0, 0, Math.PI * 2);
-  ctx.fill();
-
+  ctx.save(); ctx.translate(size*0.22, -size*0.05);
+  ctx.rotate(0.4 + Math.sin(Date.now()/200)*0.25);
+  ctx.beginPath(); ctx.ellipse(size*0.1, 0, size*0.12, size*0.05, 0.3, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = YOSHI_WHITE;
+  ctx.beginPath(); ctx.arc(size*0.2, size*0.02, size*0.045, 0, Math.PI*2); ctx.fill();
   ctx.restore();
+  // Legs
+  ctx.fillStyle = YOSHI_RED;
+  ctx.beginPath(); ctx.ellipse(-size*0.12, size*0.35, size*0.08, size*0.14, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(size*0.12, size*0.35, size*0.08, size*0.14, 0, 0, Math.PI*2); ctx.fill();
+  // Boots
+  ctx.fillStyle = YOSHI_BOOT;
+  ctx.beginPath(); ctx.ellipse(-size*0.14, size*0.48, size*0.12, size*0.06, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = YOSHI_BOOT_DARK;
+  ctx.beginPath(); ctx.ellipse(-size*0.14, size*0.52, size*0.12, size*0.03, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = YOSHI_BOOT;
+  ctx.beginPath(); ctx.ellipse(size*0.14, size*0.48, size*0.12, size*0.06, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = YOSHI_BOOT_DARK;
+  ctx.beginPath(); ctx.ellipse(size*0.14, size*0.52, size*0.12, size*0.03, 0, 0, Math.PI*2); ctx.fill();
+
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function starPath(c, cx, cy, outerR, innerR, points) {
+  let rot = -Math.PI/2, step = Math.PI/points;
+  c.moveTo(cx + Math.cos(rot)*outerR, cy + Math.sin(rot)*outerR);
+  for (let i = 0; i < points; i++) {
+    c.lineTo(cx + Math.cos(rot)*outerR, cy + Math.sin(rot)*outerR); rot += step;
+    c.lineTo(cx + Math.cos(rot)*innerR, cy + Math.sin(rot)*innerR); rot += step;
+  }
+  c.closePath();
 }
 
 function drawStar(x, y, size, twinkle) {
-  const glow = 0.7 + Math.sin(twinkle) * 0.3;
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(twinkle * 0.3);
+  const glow = 0.7 + Math.sin(twinkle)*0.3;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(twinkle*0.3);
   ctx.globalAlpha = glow;
-
-  // Glow
-  ctx.fillStyle = '#FFF9C4';
-  ctx.beginPath();
-  starPath(ctx, 0, 0, size * 0.8, size * 0.4, 5);
-  ctx.fill();
-
-  // Star
+  ctx.fillStyle = '#FFF9C4'; ctx.beginPath(); starPath(ctx, 0, 0, size*0.8, size*0.4, 5); ctx.fill();
   ctx.globalAlpha = 1;
-  ctx.fillStyle = '#FFD700';
-  ctx.beginPath();
-  starPath(ctx, 0, 0, size * 0.55, size * 0.25, 5);
-  ctx.fill();
-
-  // Sparkle center
-  ctx.fillStyle = '#FFF8E1';
-  ctx.beginPath();
-  ctx.arc(0, 0, size * 0.1, 0, Math.PI * 2);
-  ctx.fill();
-
+  ctx.fillStyle = '#FFD700'; ctx.beginPath(); starPath(ctx, 0, 0, size*0.55, size*0.25, 5); ctx.fill();
+  ctx.fillStyle = '#FFF8E1'; ctx.beginPath(); ctx.arc(0, 0, size*0.1, 0, Math.PI*2); ctx.fill();
   ctx.restore();
 }
 
-function starPath(ctx, cx, cy, outerR, innerR, points) {
-  let rot = -Math.PI / 2;
-  let step = Math.PI / points;
-  ctx.moveTo(cx + Math.cos(rot) * outerR, cy + Math.sin(rot) * outerR);
-  for (let i = 0; i < points; i++) {
-    ctx.lineTo(cx + Math.cos(rot) * outerR, cy + Math.sin(rot) * outerR);
-    rot += step;
-    ctx.lineTo(cx + Math.cos(rot) * innerR, cy + Math.sin(rot) * innerR);
-    rot += step;
-  }
-  ctx.closePath();
+// Water jug for Level 4
+function drawWaterJug(x, y, size, phase) {
+  ctx.save(); ctx.translate(x, y);
+  const bob = Math.sin(phase) * 3;
+  ctx.translate(0, bob);
+  // Jug body
+  ctx.fillStyle = '#42A5F5';
+  ctx.beginPath();
+  ctx.moveTo(-size*0.3, -size*0.1);
+  ctx.quadraticCurveTo(-size*0.35, size*0.4, 0, size*0.45);
+  ctx.quadraticCurveTo(size*0.35, size*0.4, size*0.3, -size*0.1);
+  ctx.closePath(); ctx.fill();
+  // Jug neck
+  ctx.fillStyle = '#64B5F6';
+  ctx.fillRect(-size*0.15, -size*0.3, size*0.3, size*0.25);
+  // Jug rim
+  ctx.fillStyle = '#90CAF9';
+  ctx.fillRect(-size*0.2, -size*0.35, size*0.4, size*0.08);
+  // Water shine
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.beginPath(); ctx.ellipse(-size*0.1, size*0.1, size*0.08, size*0.15, -0.2, 0, Math.PI*2); ctx.fill();
+  // Handle
+  ctx.strokeStyle = '#42A5F5'; ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(size*0.35, -size*0.1, size*0.15, -Math.PI*0.5, Math.PI*0.5);
+  ctx.stroke();
+  ctx.restore();
 }
 
+// ============ LEVEL-SPECIFIC DRAWING ============
 function drawCloud(x, y, size) {
-  if (currentLevel === 1) {
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
-  } else {
-    ctx.fillStyle = 'rgba(60,60,80,0.6)';
-  }
+  if (currentLevel === 1) ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  else if (currentLevel === 2) ctx.fillStyle = 'rgba(60,60,80,0.6)';
+  else if (currentLevel === 3) ctx.fillStyle = 'rgba(100,140,180,0.3)';
+  else ctx.fillStyle = 'rgba(80,30,10,0.5)';
   ctx.beginPath();
-  ctx.arc(x, y, size, 0, Math.PI * 2);
-  ctx.arc(x + size * 0.8, y - size * 0.3, size * 0.7, 0, Math.PI * 2);
-  ctx.arc(x + size * 1.5, y, size * 0.8, 0, Math.PI * 2);
-  ctx.arc(x + size * 0.6, y + size * 0.2, size * 0.6, 0, Math.PI * 2);
+  ctx.arc(x, y, size, 0, Math.PI*2);
+  ctx.arc(x+size*0.8, y-size*0.3, size*0.7, 0, Math.PI*2);
+  ctx.arc(x+size*1.5, y, size*0.8, 0, Math.PI*2);
+  ctx.arc(x+size*0.6, y+size*0.2, size*0.6, 0, Math.PI*2);
   ctx.fill();
 }
 
 function drawGround() {
-  const fullGroundH = H - groundY;
+  const fullH = H - groundY;
   if (currentLevel === 1) {
-    ctx.fillStyle = '#4CAF50';
-    ctx.fillRect(0, groundY, W, fullGroundH);
-    ctx.fillStyle = '#66BB6A';
-    ctx.fillRect(0, groundY, W, 8);
-    ctx.fillStyle = '#795548';
-    ctx.fillRect(0, groundY + 30, W, fullGroundH - 30);
+    ctx.fillStyle = '#4CAF50'; ctx.fillRect(0, groundY, W, fullH);
+    ctx.fillStyle = '#66BB6A'; ctx.fillRect(0, groundY, W, 8);
+    ctx.fillStyle = '#795548'; ctx.fillRect(0, groundY+30, W, fullH-30);
     ctx.fillStyle = '#388E3C';
-    for (let i = 0; i < W; i += 40) {
-      ctx.beginPath();
-      ctx.moveTo(i, groundY);
-      ctx.lineTo(i + 5, groundY - 12);
-      ctx.lineTo(i + 10, groundY);
-      ctx.fill();
+    for (let i = 0; i < W; i += 40) { ctx.beginPath(); ctx.moveTo(i, groundY); ctx.lineTo(i+5, groundY-12); ctx.lineTo(i+10, groundY); ctx.fill(); }
+  } else if (currentLevel === 2) {
+    ctx.fillStyle = '#2E2E1E'; ctx.fillRect(0, groundY, W, fullH);
+    ctx.fillStyle = '#3A3A28'; ctx.fillRect(0, groundY, W, 8);
+    ctx.fillStyle = '#1A1A10'; ctx.fillRect(0, groundY+30, W, fullH-30);
+    ctx.fillStyle = '#4A4A30';
+    for (let i = 0; i < W; i += 60) { ctx.beginPath(); ctx.moveTo(i, groundY); ctx.lineTo(i+3, groundY-8); ctx.lineTo(i+6, groundY); ctx.fill(); }
+  } else if (currentLevel === 3) {
+    // Sandy ocean floor
+    ctx.fillStyle = '#C8A96E'; ctx.fillRect(0, groundY, W, fullH);
+    ctx.fillStyle = '#D4B87A'; ctx.fillRect(0, groundY, W, 8);
+    ctx.fillStyle = '#A08050'; ctx.fillRect(0, groundY+25, W, fullH-25);
+    // Shells
+    ctx.fillStyle = '#E8D5B5';
+    for (let i = 30; i < W; i += 120) {
+      ctx.beginPath(); ctx.arc(i, groundY+15, 6, 0, Math.PI*2); ctx.fill();
     }
   } else {
-    // Spooky ground — dark earth with dead grass
-    ctx.fillStyle = '#2E2E1E';
-    ctx.fillRect(0, groundY, W, fullGroundH);
-    ctx.fillStyle = '#3A3A28';
-    ctx.fillRect(0, groundY, W, 8);
-    ctx.fillStyle = '#1A1A10';
-    ctx.fillRect(0, groundY + 30, W, fullGroundH - 30);
-    // Dead/sparse grass tufts
-    ctx.fillStyle = '#4A4A30';
-    for (let i = 0; i < W; i += 60) {
-      ctx.beginPath();
-      ctx.moveTo(i, groundY);
-      ctx.lineTo(i + 3, groundY - 8);
-      ctx.lineTo(i + 6, groundY);
-      ctx.fill();
+    // Volcanic ground
+    ctx.fillStyle = '#2D1B0E'; ctx.fillRect(0, groundY, W, fullH);
+    ctx.fillStyle = '#4E2A0A'; ctx.fillRect(0, groundY, W, 6);
+    ctx.fillStyle = '#1A0E06'; ctx.fillRect(0, groundY+25, W, fullH-25);
+    // Lava cracks
+    ctx.strokeStyle = '#FF6600'; ctx.lineWidth = 2;
+    for (let i = 20; i < W; i += 80) {
+      ctx.beginPath(); ctx.moveTo(i, groundY+5);
+      ctx.lineTo(i+10, groundY+20); ctx.lineTo(i+25, groundY+12);
+      ctx.stroke();
     }
   }
 }
 
-// Dead tree for Level 2
 function drawDeadTree(x, baseY, height) {
-  // Trunk
   ctx.fillStyle = '#2D1B0E';
-  ctx.beginPath();
-  ctx.moveTo(x - 8, baseY);
-  ctx.lineTo(x - 5, baseY - height);
-  ctx.lineTo(x + 5, baseY - height);
-  ctx.lineTo(x + 8, baseY);
-  ctx.fill();
-
-  // Branches
-  ctx.strokeStyle = '#2D1B0E';
-  ctx.lineWidth = 4;
-  // Left branch
-  ctx.beginPath();
-  ctx.moveTo(x, baseY - height * 0.6);
-  ctx.quadraticCurveTo(x - 30, baseY - height * 0.8, x - 45, baseY - height * 0.65);
-  ctx.stroke();
-  // Right branch
-  ctx.beginPath();
-  ctx.moveTo(x, baseY - height * 0.75);
-  ctx.quadraticCurveTo(x + 25, baseY - height * 0.95, x + 40, baseY - height * 0.8);
-  ctx.stroke();
-  // Small twig
+  ctx.beginPath(); ctx.moveTo(x-8, baseY); ctx.lineTo(x-5, baseY-height); ctx.lineTo(x+5, baseY-height); ctx.lineTo(x+8, baseY); ctx.fill();
+  ctx.strokeStyle = '#2D1B0E'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(x, baseY-height*0.6); ctx.quadraticCurveTo(x-30, baseY-height*0.8, x-45, baseY-height*0.65); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x, baseY-height*0.75); ctx.quadraticCurveTo(x+25, baseY-height*0.95, x+40, baseY-height*0.8); ctx.stroke();
   ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x, baseY - height * 0.9);
-  ctx.lineTo(x - 15, baseY - height * 1.05);
-  ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x, baseY-height*0.9); ctx.lineTo(x-15, baseY-height*1.05); ctx.stroke();
 }
 
-// Bat for Level 2
 function drawBat(x, y, wingPhase) {
-  ctx.fillStyle = '#1A1A2E';
-  ctx.save();
-  ctx.translate(x, y);
-  // Body
-  ctx.beginPath();
-  ctx.ellipse(0, 0, 6, 4, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Wings
-  const wingY = Math.sin(wingPhase) * 6;
-  ctx.beginPath();
-  ctx.moveTo(-4, 0);
-  ctx.quadraticCurveTo(-14, -8 + wingY, -18, -2 + wingY);
-  ctx.quadraticCurveTo(-12, 2, -4, 0);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(4, 0);
-  ctx.quadraticCurveTo(14, -8 + wingY, 18, -2 + wingY);
-  ctx.quadraticCurveTo(12, 2, 4, 0);
-  ctx.fill();
-  // Eyes
+  ctx.fillStyle = '#1A1A2E'; ctx.save(); ctx.translate(x, y);
+  ctx.beginPath(); ctx.ellipse(0, 0, 6, 4, 0, 0, Math.PI*2); ctx.fill();
+  const wy = Math.sin(wingPhase)*6;
+  ctx.beginPath(); ctx.moveTo(-4,0); ctx.quadraticCurveTo(-14,-8+wy,-18,-2+wy); ctx.quadraticCurveTo(-12,2,-4,0); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(4,0); ctx.quadraticCurveTo(14,-8+wy,18,-2+wy); ctx.quadraticCurveTo(12,2,4,0); ctx.fill();
   ctx.fillStyle = '#FF5252';
-  ctx.beginPath();
-  ctx.arc(-2, -1, 1.2, 0, Math.PI * 2);
-  ctx.arc(2, -1, 1.2, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.beginPath(); ctx.arc(-2,-1,1.2,0,Math.PI*2); ctx.arc(2,-1,1.2,0,Math.PI*2); ctx.fill();
   ctx.restore();
 }
 
+function drawSeaweed(x, baseY, height, phase) {
+  ctx.strokeStyle = '#2E7D32'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x, baseY);
+  for (let j = 0; j < height; j += 10) {
+    const sway = Math.sin(phase + j * 0.05) * 8;
+    ctx.lineTo(x + sway, baseY - j);
+  }
+  ctx.stroke();
+  // Leaves
+  ctx.fillStyle = '#388E3C';
+  for (let j = 20; j < height; j += 25) {
+    const sway = Math.sin(phase + j * 0.05) * 8;
+    ctx.beginPath(); ctx.ellipse(x + sway + 8, baseY - j, 10, 4, 0.3, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+function drawFish(x, y, size, phase) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = phase % 2 < 1 ? '#FF8A65' : '#4DD0E1';
+  // Body
+  ctx.beginPath(); ctx.ellipse(0, 0, size, size*0.5, 0, 0, Math.PI*2); ctx.fill();
+  // Tail
+  ctx.beginPath(); ctx.moveTo(-size, 0); ctx.lineTo(-size*1.5, -size*0.4); ctx.lineTo(-size*1.5, size*0.4); ctx.closePath(); ctx.fill();
+  // Eye
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(size*0.4, -size*0.1, size*0.2, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.beginPath(); ctx.arc(size*0.45, -size*0.1, size*0.1, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+// Mr. Lava boss drawing
+function drawBoss(b) {
+  ctx.save(); ctx.translate(b.x, b.y);
+
+  // Lava glow
+  ctx.fillStyle = 'rgba(255, 100, 0, 0.15)';
+  ctx.beginPath(); ctx.arc(0, 0, b.size * 1.3, 0, Math.PI*2); ctx.fill();
+
+  // Body — jagged lava monster
+  const s = b.size;
+  ctx.fillStyle = '#BF360C';
+  ctx.beginPath(); ctx.ellipse(0, 0, s*0.8, s, 0, 0, Math.PI*2); ctx.fill();
+
+  // Lava texture
+  ctx.fillStyle = '#E65100';
+  ctx.beginPath(); ctx.ellipse(-s*0.2, -s*0.1, s*0.4, s*0.6, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#FF8F00';
+  ctx.beginPath(); ctx.ellipse(s*0.1, s*0.2, s*0.25, s*0.35, 0, 0, Math.PI*2); ctx.fill();
+
+  // Lava drips / horns on top
+  ctx.fillStyle = '#DD2C00';
+  for (let i = -2; i <= 2; i++) {
+    const hx = i * s * 0.2;
+    const hh = s * (0.3 + Math.abs(i) * 0.15);
+    ctx.beginPath(); ctx.moveTo(hx - s*0.08, -s*0.7); ctx.lineTo(hx, -s*0.7 - hh); ctx.lineTo(hx + s*0.08, -s*0.7); ctx.fill();
+  }
+  // Glowing tips
+  ctx.fillStyle = '#FFAB00';
+  for (let i = -2; i <= 2; i++) {
+    const hx = i * s * 0.2;
+    const hh = s * (0.3 + Math.abs(i) * 0.15);
+    ctx.beginPath(); ctx.arc(hx, -s*0.7 - hh, 3, 0, Math.PI*2); ctx.fill();
+  }
+
+  // Eyes — angry glowing yellow
+  ctx.fillStyle = '#FFD600';
+  ctx.beginPath(); ctx.ellipse(-s*0.25, -s*0.3, s*0.15, s*0.12, -0.1, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(s*0.25, -s*0.3, s*0.15, s*0.12, 0.1, 0, Math.PI*2); ctx.fill();
+  // Angry pupils
+  ctx.fillStyle = '#B71C1C';
+  ctx.beginPath(); ctx.ellipse(-s*0.25, -s*0.3, s*0.07, s*0.09, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(s*0.25, -s*0.3, s*0.07, s*0.09, 0, 0, Math.PI*2); ctx.fill();
+  // Angry eyebrows
+  ctx.strokeStyle = '#4E2A0A'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(-s*0.4, -s*0.5); ctx.lineTo(-s*0.15, -s*0.42); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(s*0.4, -s*0.5); ctx.lineTo(s*0.15, -s*0.42); ctx.stroke();
+
+  // Mouth — jagged
+  ctx.fillStyle = '#4E2A0A';
+  ctx.beginPath();
+  ctx.moveTo(-s*0.35, s*0.1);
+  for (let i = 0; i <= 6; i++) {
+    const tx = -s*0.35 + i*(s*0.7/6);
+    const ty = (i % 2 === 0) ? s*0.1 : s*0.25;
+    ctx.lineTo(tx, ty);
+  }
+  ctx.lineTo(-s*0.35, s*0.1);
+  ctx.fill();
+  // Inner mouth glow
+  ctx.fillStyle = '#FF6D00';
+  ctx.beginPath(); ctx.ellipse(0, s*0.15, s*0.2, s*0.06, 0, 0, Math.PI*2); ctx.fill();
+
+  // "Mr. Lava" name tag
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 14px Comic Sans MS';
+  ctx.textAlign = 'center';
+  ctx.fillText('Mr. Lava', 0, s * 1.2);
+
+  ctx.restore();
+}
+
+// Fireball drawing
+function drawFireball(fb) {
+  ctx.save(); ctx.translate(fb.x, fb.y);
+  // Glow
+  ctx.fillStyle = 'rgba(255, 100, 0, 0.3)';
+  ctx.beginPath(); ctx.arc(0, 0, fb.size*1.5, 0, Math.PI*2); ctx.fill();
+  // Core
+  ctx.fillStyle = '#FF6D00';
+  ctx.beginPath(); ctx.arc(0, 0, fb.size, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#FFAB00';
+  ctx.beginPath(); ctx.arc(0, 0, fb.size*0.6, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#FFF176';
+  ctx.beginPath(); ctx.arc(0, 0, fb.size*0.25, 0, Math.PI*2); ctx.fill();
+  // Trail particles
+  for (let i = 0; i < 3; i++) {
+    const tx = -fb.vx * (i+1) * 2 + (Math.random()-0.5)*4;
+    const ty = -fb.vy * (i+1) * 2 + (Math.random()-0.5)*4;
+    ctx.fillStyle = `rgba(255, 109, 0, ${0.5 - i*0.15})`;
+    ctx.beginPath(); ctx.arc(tx, ty, fb.size*(0.5 - i*0.1), 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ============ BACKGROUNDS ============
 function drawBackground() {
   if (currentLevel === 1) {
-    // ---- LEVEL 1: Sunny day ----
+    // Sunny day
     const grad = ctx.createLinearGradient(0, 0, 0, groundY);
-    grad.addColorStop(0, '#87CEEB');
-    grad.addColorStop(1, '#B3E5FC');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, groundY);
-
-    // Sun
-    ctx.fillStyle = '#FFF176';
-    ctx.beginPath();
-    ctx.arc(W - 100, 80, 50, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#FFEE58';
-    ctx.beginPath();
-    ctx.arc(W - 100, 80, 40, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Clouds
+    grad.addColorStop(0, '#87CEEB'); grad.addColorStop(1, '#B3E5FC');
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, W, groundY);
+    ctx.fillStyle = '#FFF176'; ctx.beginPath(); ctx.arc(W-100, 80, 50, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#FFEE58'; ctx.beginPath(); ctx.arc(W-100, 80, 40, 0, Math.PI*2); ctx.fill();
     clouds.forEach(c => drawCloud(c.x, c.y, c.size));
-
-    // Mountains
-    ctx.fillStyle = '#81C784';
-    ctx.beginPath();
-    ctx.moveTo(0, groundY);
-    ctx.lineTo(150, groundY - 120);
-    ctx.lineTo(300, groundY);
-    ctx.fill();
-
-    ctx.fillStyle = '#66BB6A';
-    ctx.beginPath();
-    ctx.moveTo(200, groundY);
-    ctx.lineTo(400, groundY - 160);
-    ctx.lineTo(600, groundY);
-    ctx.fill();
-
-    ctx.fillStyle = '#81C784';
-    ctx.beginPath();
-    ctx.moveTo(W - 400, groundY);
-    ctx.lineTo(W - 200, groundY - 100);
-    ctx.lineTo(W, groundY);
-    ctx.fill();
-
-  } else {
-    // ---- LEVEL 2: Spooky night ----
+    ctx.fillStyle = '#81C784'; ctx.beginPath(); ctx.moveTo(0, groundY); ctx.lineTo(150, groundY-120); ctx.lineTo(300, groundY); ctx.fill();
+    ctx.fillStyle = '#66BB6A'; ctx.beginPath(); ctx.moveTo(200, groundY); ctx.lineTo(400, groundY-160); ctx.lineTo(600, groundY); ctx.fill();
+    ctx.fillStyle = '#81C784'; ctx.beginPath(); ctx.moveTo(W-400, groundY); ctx.lineTo(W-200, groundY-100); ctx.lineTo(W, groundY); ctx.fill();
+  } else if (currentLevel === 2) {
+    // Spooky night
     const grad = ctx.createLinearGradient(0, 0, 0, groundY);
-    grad.addColorStop(0, '#0D0D2B');
-    grad.addColorStop(0.4, '#1A1A3E');
-    grad.addColorStop(1, '#2D1B4E');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, groundY);
-
-    // Lightning flash overlay
-    if (lightningFlash > 0) {
-      ctx.fillStyle = `rgba(200, 200, 255, ${lightningFlash * 0.3})`;
-      ctx.fillRect(0, 0, W, H);
-      lightningFlash -= 0.05;
-    }
-
-    // Stars in sky (tiny twinkling dots)
+    grad.addColorStop(0, '#0D0D2B'); grad.addColorStop(0.4, '#1A1A3E'); grad.addColorStop(1, '#2D1B4E');
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, W, groundY);
+    if (lightningFlash > 0) { ctx.fillStyle = `rgba(200,200,255,${lightningFlash*0.3})`; ctx.fillRect(0,0,W,H); lightningFlash -= 0.05; }
     ctx.fillStyle = '#fff';
-    for (let i = 0; i < 40; i++) {
-      // Use deterministic positions based on index
-      const sx = ((i * 137 + 50) % W);
-      const sy = ((i * 89 + 20) % (groundY * 0.5));
-      const twinkle = 0.3 + Math.sin(Date.now() / 500 + i * 0.7) * 0.7;
-      ctx.globalAlpha = twinkle;
-      ctx.beginPath();
-      ctx.arc(sx, sy, 1.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    for (let i=0; i<40; i++) { const sx=((i*137+50)%W), sy=((i*89+20)%(groundY*0.5)); ctx.globalAlpha = 0.3+Math.sin(Date.now()/500+i*0.7)*0.7; ctx.beginPath(); ctx.arc(sx,sy,1.5,0,Math.PI*2); ctx.fill(); }
     ctx.globalAlpha = 1;
-
-    // Eerie moon
-    ctx.fillStyle = '#E8E8C8';
-    ctx.beginPath();
-    ctx.arc(W - 100, 80, 45, 0, Math.PI * 2);
-    ctx.fill();
-    // Moon glow
-    ctx.fillStyle = 'rgba(232, 232, 200, 0.15)';
-    ctx.beginPath();
-    ctx.arc(W - 100, 80, 70, 0, Math.PI * 2);
-    ctx.fill();
-    // Moon craters
-    ctx.fillStyle = 'rgba(180, 180, 160, 0.4)';
-    ctx.beginPath();
-    ctx.arc(W - 112, 72, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(W - 90, 90, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(W - 105, 95, 4, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Dark clouds
+    ctx.fillStyle = '#E8E8C8'; ctx.beginPath(); ctx.arc(W-100, 80, 45, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = 'rgba(232,232,200,0.15)'; ctx.beginPath(); ctx.arc(W-100, 80, 70, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = 'rgba(180,180,160,0.4)';
+    ctx.beginPath(); ctx.arc(W-112,72,8,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(W-90,90,6,0,Math.PI*2); ctx.fill();
     clouds.forEach(c => drawCloud(c.x, c.y, c.size));
-
-    // Dark mountains / hills
-    ctx.fillStyle = '#1A0E2E';
-    ctx.beginPath();
-    ctx.moveTo(0, groundY);
-    ctx.lineTo(150, groundY - 120);
-    ctx.lineTo(300, groundY);
-    ctx.fill();
-
-    ctx.fillStyle = '#150A28';
-    ctx.beginPath();
-    ctx.moveTo(200, groundY);
-    ctx.lineTo(400, groundY - 160);
-    ctx.lineTo(600, groundY);
-    ctx.fill();
-
-    ctx.fillStyle = '#1A0E2E';
-    ctx.beginPath();
-    ctx.moveTo(W - 400, groundY);
-    ctx.lineTo(W - 200, groundY - 100);
-    ctx.lineTo(W, groundY);
-    ctx.fill();
-
-    // Dead trees
-    drawDeadTree(80, groundY, 110);
-    drawDeadTree(W - 120, groundY, 95);
-    drawDeadTree(W * 0.4, groundY, 130);
-    drawDeadTree(W * 0.7, groundY, 85);
-
-    // Fog at ground level
+    ctx.fillStyle = '#1A0E2E'; ctx.beginPath(); ctx.moveTo(0,groundY); ctx.lineTo(150,groundY-120); ctx.lineTo(300,groundY); ctx.fill();
+    ctx.fillStyle = '#150A28'; ctx.beginPath(); ctx.moveTo(200,groundY); ctx.lineTo(400,groundY-160); ctx.lineTo(600,groundY); ctx.fill();
+    drawDeadTree(80, groundY, 110); drawDeadTree(W-120, groundY, 95); drawDeadTree(W*0.4, groundY, 130);
     fogOffset += 0.3;
-    ctx.fillStyle = 'rgba(100, 80, 120, 0.2)';
-    for (let fx = -50 + (fogOffset % 100); fx < W + 50; fx += 100) {
-      ctx.beginPath();
-      ctx.ellipse(fx, groundY - 10, 80, 18, 0, 0, Math.PI * 2);
-      ctx.fill();
+    ctx.fillStyle = 'rgba(100,80,120,0.2)';
+    for (let fx=-50+(fogOffset%100); fx<W+50; fx+=100) { ctx.beginPath(); ctx.ellipse(fx, groundY-10, 80, 18, 0, 0, Math.PI*2); ctx.fill(); }
+    bats.forEach(b => { b.x+=b.vx; b.phase+=0.15; if(b.x>W+30)b.x=-30; if(b.x<-30)b.x=W+30; drawBat(b.x, b.y+Math.sin(b.phase*0.4)*8, b.phase); });
+    lightningTimer--; if (lightningTimer<=0) { lightningTimer = 300+Math.floor(Math.random()*400); lightningFlash = 1; }
+  } else if (currentLevel === 3) {
+    // Underwater
+    const grad = ctx.createLinearGradient(0, 0, 0, groundY);
+    grad.addColorStop(0, '#0D47A1'); grad.addColorStop(0.3, '#1565C0'); grad.addColorStop(0.7, '#1976D2'); grad.addColorStop(1, '#1E88E5');
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, W, groundY);
+    // Light rays from surface
+    ctx.save();
+    for (let i = 0; i < 5; i++) {
+      const rx = (i * W/5) + Math.sin(Date.now()/3000 + i)*30;
+      ctx.fillStyle = 'rgba(255,255,255,0.04)';
+      ctx.beginPath(); ctx.moveTo(rx, 0); ctx.lineTo(rx-60, groundY); ctx.lineTo(rx+60, groundY); ctx.closePath(); ctx.fill();
     }
-    ctx.fillStyle = 'rgba(80, 60, 100, 0.15)';
-    for (let fx = -30 + ((fogOffset * 0.7) % 120); fx < W + 50; fx += 120) {
-      ctx.beginPath();
-      ctx.ellipse(fx, groundY - 25, 60, 14, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Bats
-    bats.forEach(b => {
-      b.x += b.vx;
-      b.phase += 0.15;
-      if (b.x > W + 30) b.x = -30;
-      if (b.x < -30) b.x = W + 30;
-      drawBat(b.x, b.y + Math.sin(b.phase * 0.4) * 8, b.phase);
+    ctx.restore();
+    // Bubbles
+    bubbles.forEach(b => {
+      b.y -= b.speed; b.x += Math.sin(b.phase)*0.5; b.phase += 0.03;
+      if (b.y < -20) { b.y = groundY + 20; b.x = Math.random()*W; }
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.size, 0, Math.PI*2); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.1)';
+      ctx.beginPath(); ctx.arc(b.x-b.size*0.3, b.y-b.size*0.3, b.size*0.3, 0, Math.PI*2); ctx.fill();
     });
-
-    // Random lightning
-    lightningTimer--;
-    if (lightningTimer <= 0) {
-      lightningTimer = 300 + Math.floor(Math.random() * 400);
-      lightningFlash = 1;
+    // Seaweed
+    seaweed.forEach(s => drawSeaweed(s.x, groundY, s.h, Date.now()/1000 + s.offset));
+    // Fish
+    for (let i = 0; i < 3; i++) {
+      const fx = ((Date.now()/20 + i*200) % (W+100)) - 50;
+      const fy = 80 + i*60 + Math.sin(Date.now()/1000+i)*20;
+      drawFish(fx, fy, 12+i*3, i);
+    }
+    // Water overlay shimmer
+    ctx.fillStyle = 'rgba(0,100,200,0.05)';
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    // Level 4: Volcanic / lava arena
+    const grad = ctx.createLinearGradient(0, 0, 0, groundY);
+    grad.addColorStop(0, '#1A0000'); grad.addColorStop(0.3, '#3E0000'); grad.addColorStop(0.7, '#5D0000'); grad.addColorStop(1, '#7A0000');
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, W, groundY);
+    // Smoke/ash
+    clouds.forEach(c => drawCloud(c.x, c.y, c.size));
+    // Lava pools at bottom (glowing)
+    const lavaGlow = 0.5 + Math.sin(Date.now()/500)*0.2;
+    ctx.fillStyle = `rgba(255, 100, 0, ${lavaGlow * 0.3})`;
+    ctx.fillRect(0, groundY-5, W, 10);
+    // Volcanic mountains
+    ctx.fillStyle = '#2D0000';
+    ctx.beginPath(); ctx.moveTo(0,groundY); ctx.lineTo(100,groundY-100); ctx.lineTo(200,groundY); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(W-250,groundY); ctx.lineTo(W-120,groundY-130); ctx.lineTo(W,groundY); ctx.fill();
+    // Ember particles floating up
+    for (let i = 0; i < 15; i++) {
+      const ex = ((i*97+Date.now()/30) % W);
+      const ey = groundY - ((Date.now()/15+i*60) % (groundY*0.8));
+      ctx.fillStyle = `rgba(255, ${100+i*10}, 0, ${0.3 + Math.sin(Date.now()/200+i)*0.2})`;
+      ctx.beginPath(); ctx.arc(ex, ey, 2, 0, Math.PI*2); ctx.fill();
     }
   }
 }
 
-// --- Particles ---
-function spawnParticles(x, y) {
-  for (let i = 0; i < 12; i++) {
-    particles.push({
-      x, y,
-      vx: (Math.random() - 0.5) * 8,
-      vy: (Math.random() - 0.5) * 8 - 3,
-      life: 1,
-      color: ['#FFD700', '#FFF176', '#FFAB00', '#FFE082'][Math.floor(Math.random() * 4)],
-      size: Math.random() * 6 + 3
-    });
-  }
-}
-
-function updateParticles() {
-  for (let i = particles.length - 1; i >= 0; i--) {
-    const p = particles[i];
-    p.x += p.vx;
-    p.y += p.vy;
-    p.vy += 0.15;
-    p.life -= 0.025;
-    if (p.life <= 0) particles.splice(i, 1);
-  }
-}
-
-function drawParticles() {
-  particles.forEach(p => {
-    ctx.globalAlpha = p.life;
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-    ctx.fill();
-  });
-  ctx.globalAlpha = 1;
-}
-
-// --- Platforms ---
+// ============ PLATFORMS ============
 function spawnPlatforms() {
   platforms = [];
   const lvl = LEVELS[currentLevel];
   const count = lvl.platformCount();
-
-  // Calculate max reachable height from a single jump
-  // height = v^2 / (2 * gravity)  — but we leave some margin for error
   const jumpV = Math.abs(lvl.jumpVelocity);
-  const singleJumpHeight = (jumpV * jumpV) / (2 * lvl.gravity) * 0.75; // 75% of theoretical max for safety
-  // Double jump from a platform can reach roughly this high above it
+  const singleJumpHeight = (jumpV*jumpV)/(2*lvl.gravity)*0.75;
   const doubleJumpHeight = singleJumpHeight * 1.6;
-
-  // Build a "staircase" of platforms — each one is reachable from ground or a lower platform
-  // Start from ground level and work upward
-  let currentY = groundY; // start from ground
-  const usedXRanges = []; // track x positions to spread platforms across screen
-
+  let curY = groundY;
+  const usedX = [];
   for (let i = 0; i < count; i++) {
-    const platW = lvl.platformMinW + Math.random() * (lvl.platformMaxW - lvl.platformMinW);
-
-    // Height step: reachable from currentY via single or double jump
-    // First platform is reachable by single jump from ground
-    // Higher platforms may need double jump but must be reachable from a previous platform
-    const minStep = singleJumpHeight * 0.4; // don't place too close together
-    const maxStep = (i === 0) ? singleJumpHeight : doubleJumpHeight;
-    const step = minStep + Math.random() * (maxStep - minStep);
-
-    let platY = currentY - step;
-    // Clamp so platforms don't go above the top of the screen
-    platY = Math.max(80, platY);
-
-    // Spread x across the screen — avoid stacking on the same side
-    let platX;
-    let attempts = 0;
-    do {
-      platX = 60 + Math.random() * (W - 120 - platW);
-      attempts++;
-    } while (attempts < 20 && usedXRanges.some(r =>
-      Math.abs((platX + platW / 2) - r) < W * 0.2
-    ));
-
-    usedXRanges.push(platX + platW / 2);
-
-    platforms.push({
-      x: platX,
-      y: platY,
-      w: platW,
-      h: 18
-    });
-
-    // Next platform is reachable from this one
-    currentY = platY;
+    const pw = lvl.platformMinW + Math.random()*(lvl.platformMaxW - lvl.platformMinW);
+    const minStep = singleJumpHeight * 0.4;
+    const maxStep = (i===0) ? singleJumpHeight : doubleJumpHeight;
+    const step = minStep + Math.random()*(maxStep - minStep);
+    let py = curY - step;
+    py = Math.max(80, py);
+    let px; let att = 0;
+    do { px = 60+Math.random()*(W-120-pw); att++; } while (att<20 && usedX.some(r => Math.abs((px+pw/2)-r) < W*0.2));
+    usedX.push(px + pw/2);
+    platforms.push({ x: px, y: py, w: pw, h: 18 });
+    curY = py;
   }
 }
 
 function drawPlatforms() {
   platforms.forEach(p => {
     if (currentLevel === 1) {
-      ctx.fillStyle = 'rgba(0,0,0,0.1)';
-      ctx.fillRect(p.x + 4, p.y + 4, p.w, p.h);
-      ctx.fillStyle = PLATFORM_COLOR;
-      ctx.fillRect(p.x, p.y, p.w, p.h);
-      ctx.fillStyle = PLATFORM_TOP;
-      ctx.fillRect(p.x, p.y, p.w, 5);
-      ctx.fillStyle = '#66BB6A';
-      ctx.fillRect(p.x, p.y - 3, p.w, 5);
+      ctx.fillStyle = 'rgba(0,0,0,0.1)'; ctx.fillRect(p.x+4, p.y+4, p.w, p.h);
+      ctx.fillStyle = PLATFORM_COLOR; ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.fillStyle = PLATFORM_TOP; ctx.fillRect(p.x, p.y, p.w, 5);
+      ctx.fillStyle = '#66BB6A'; ctx.fillRect(p.x, p.y-3, p.w, 5);
       ctx.fillStyle = '#388E3C';
-      for (let gx = p.x + 8; gx < p.x + p.w - 8; gx += 18) {
-        ctx.beginPath();
-        ctx.moveTo(gx, p.y - 3);
-        ctx.lineTo(gx + 3, p.y - 11);
-        ctx.lineTo(gx + 6, p.y - 3);
-        ctx.fill();
+      for (let gx = p.x+8; gx < p.x+p.w-8; gx += 18) { ctx.beginPath(); ctx.moveTo(gx, p.y-3); ctx.lineTo(gx+3, p.y-11); ctx.lineTo(gx+6, p.y-3); ctx.fill(); }
+    } else if (currentLevel === 2) {
+      ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(p.x+4, p.y+4, p.w, p.h);
+      ctx.fillStyle = '#3E2723'; ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.fillStyle = '#4E342E'; ctx.fillRect(p.x, p.y, p.w, 4);
+      ctx.strokeStyle = '#2A1A14'; ctx.lineWidth = 1;
+      for (let cx = p.x+15; cx < p.x+p.w-10; cx += 30) { ctx.beginPath(); ctx.moveTo(cx, p.y+2); ctx.lineTo(cx+5, p.y+p.h-2); ctx.stroke(); }
+      ctx.fillStyle = 'rgba(50,80,40,0.4)'; ctx.fillRect(p.x, p.y-2, p.w, 3);
+    } else if (currentLevel === 3) {
+      // Coral / rock platforms
+      ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.fillRect(p.x+3, p.y+3, p.w, p.h);
+      ctx.fillStyle = '#5D4037'; ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.fillStyle = '#6D4C41'; ctx.fillRect(p.x, p.y, p.w, 4);
+      // Coral on top
+      ctx.fillStyle = '#E91E63';
+      for (let cx = p.x+10; cx < p.x+p.w-10; cx += 25) {
+        ctx.beginPath(); ctx.arc(cx, p.y-5, 5, 0, Math.PI*2); ctx.fill();
       }
     } else {
-      // Spooky dark stone platforms
-      ctx.fillStyle = 'rgba(0,0,0,0.3)';
-      ctx.fillRect(p.x + 4, p.y + 4, p.w, p.h);
-      ctx.fillStyle = '#3E2723';
-      ctx.fillRect(p.x, p.y, p.w, p.h);
-      ctx.fillStyle = '#4E342E';
-      ctx.fillRect(p.x, p.y, p.w, 4);
-      // Cracks
-      ctx.strokeStyle = '#2A1A14';
-      ctx.lineWidth = 1;
-      for (let cx = p.x + 15; cx < p.x + p.w - 10; cx += 30) {
-        ctx.beginPath();
-        ctx.moveTo(cx, p.y + 2);
-        ctx.lineTo(cx + 5, p.y + p.h - 2);
-        ctx.stroke();
-      }
-      // Moss
-      ctx.fillStyle = 'rgba(50, 80, 40, 0.4)';
-      ctx.fillRect(p.x, p.y - 2, p.w, 3);
+      // Volcanic rock platforms
+      ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(p.x+4, p.y+4, p.w, p.h);
+      ctx.fillStyle = '#3E2723'; ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.fillStyle = '#4E342E'; ctx.fillRect(p.x, p.y, p.w, 4);
+      // Lava glow edges
+      ctx.strokeStyle = 'rgba(255,100,0,0.4)'; ctx.lineWidth = 2;
+      ctx.strokeRect(p.x, p.y, p.w, p.h);
     }
   });
 }
 
-// --- Stars ---
+// ============ STARS / COLLECTIBLES ============
 function spawnStar() {
   const lvl = LEVELS[currentLevel];
-  const bobSpeedMin = lvl.starBobSpeed[0];
-  const bobSpeedRange = lvl.starBobSpeed[1] - lvl.starBobSpeed[0];
-
-  // Calculate max reachable height from ground via double jump
+  const bMin = lvl.starBobSpeed[0], bRange = lvl.starBobSpeed[1] - lvl.starBobSpeed[0];
   const jumpV = Math.abs(lvl.jumpVelocity);
-  const maxReachFromGround = (jumpV * jumpV) / (2 * lvl.gravity) * 1.5; // double jump ~1.5x
+  const maxReach = (jumpV*jumpV)/(2*lvl.gravity)*1.5;
 
   if (platforms.length > 0 && Math.random() < lvl.starNearPlatformChance) {
-    const p = platforms[Math.floor(Math.random() * platforms.length)];
-    // Place star reachable by jumping from this platform (single jump height above it)
-    const singleJumpH = (jumpV * jumpV) / (2 * lvl.gravity) * 0.65;
-    stars.push({
-      x: p.x + Math.random() * p.w,
-      y: p.y - 30 - Math.random() * Math.min(50, singleJumpH * 0.5),
-      phase: Math.random() * Math.PI * 2,
-      bobSpeed: bobSpeedMin + Math.random() * bobSpeedRange,
-      bobAmount: 10 + Math.random() * 8
-    });
+    const p = platforms[Math.floor(Math.random()*platforms.length)];
+    const sjH = (jumpV*jumpV)/(2*lvl.gravity)*0.65;
+    stars.push({ x: p.x+Math.random()*p.w, y: p.y-30-Math.random()*Math.min(50, sjH*0.5), phase: Math.random()*Math.PI*2, bobSpeed: bMin+Math.random()*bRange, bobAmount: 10+Math.random()*8 });
   } else {
-    // Place star reachable from ground via double jump
-    const maxHeight = Math.min(maxReachFromGround, groundY - 80);
-    stars.push({
-      x: Math.random() * (W - 100) + 50,
-      y: groundY - 60 - Math.random() * maxHeight * 0.7,
-      phase: Math.random() * Math.PI * 2,
-      bobSpeed: bobSpeedMin + Math.random() * bobSpeedRange,
-      bobAmount: 12 + Math.random() * 10
-    });
+    const maxH = Math.min(maxReach, groundY-80);
+    stars.push({ x: Math.random()*(W-100)+50, y: groundY-60-Math.random()*maxH*0.7, phase: Math.random()*Math.PI*2, bobSpeed: bMin+Math.random()*bRange, bobAmount: 12+Math.random()*10 });
   }
 }
 
-// --- Game Logic ---
-function initGame() {
-  const lvl = LEVELS[currentLevel];
+// ============ PARTICLES ============
+function spawnParticles(x, y, colors) {
+  const cols = colors || ['#FFD700','#FFF176','#FFAB00','#FFE082'];
+  for (let i = 0; i < 12; i++) {
+    particles.push({ x, y, vx: (Math.random()-0.5)*8, vy: (Math.random()-0.5)*8-3, life: 1, color: cols[Math.floor(Math.random()*cols.length)], size: Math.random()*6+3 });
+  }
+}
+function updateParticles() {
+  for (let i = particles.length-1; i >= 0; i--) {
+    const p = particles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life -= 0.025;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+function drawParticles() {
+  particles.forEach(p => { ctx.globalAlpha = p.life; ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill(); });
+  ctx.globalAlpha = 1;
+}
 
-  dino = {
-    x: W / 2,
-    y: groundY - DINO_SIZE * 0.5,
-    vx: 0,
-    vy: 0,
-    onGround: true,
-    facingRight: true,
-    speed: lvl.dinoSpeed,
-    jumpsLeft: lvl.maxJumps,
-    maxJumps: lvl.maxJumps
+// ============ BOSS LOGIC ============
+function initBoss() {
+  boss = {
+    x: W * 0.8,
+    y: groundY - 80,
+    size: 60,
+    vx: 1.5,
+    phase: 0
   };
+  fireballs = [];
+  bossFireTimer = 120;
+}
 
-  stars = [];
-  clouds = [];
-  particles = [];
-  platforms = [];
-  bats = [];
-  score = 0;
-  totalStars = lvl.totalStars;
-  keysDown = {};
-  fogOffset = 0;
-  lightningTimer = 300;
-  lightningFlash = 0;
+function updateBoss() {
+  if (!boss) return;
+  boss.phase += 0.02;
+  boss.x += boss.vx;
+  boss.y = groundY - boss.size - 10 + Math.sin(boss.phase)*20;
+  // Bounce off walls
+  if (boss.x < boss.size || boss.x > W - boss.size) boss.vx *= -1;
 
-  spawnPlatforms();
-
-  // Update page background to match level
-  document.body.style.background = currentLevel === 1 ? '#87CEEB' : '#0D0D2B';
-
-  // Spawn initial stars (3 at a time)
-  for (let i = 0; i < 3; i++) spawnStar();
-
-  // Clouds
-  const cloudCount = currentLevel === 1 ? 5 : 7;
-  for (let i = 0; i < cloudCount; i++) {
-    clouds.push({
-      x: Math.random() * W,
-      y: 30 + Math.random() * 100,
-      size: 20 + Math.random() * 30,
-      speed: currentLevel === 1 ? (0.2 + Math.random() * 0.5) : (0.3 + Math.random() * 0.8)
+  // Fire timer
+  bossFireTimer--;
+  if (bossFireTimer <= 0) {
+    // Shoot fireball at dino
+    const dx = dino.x - boss.x;
+    const dy = dino.y - boss.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const speed = 4 + Math.random()*2;
+    fireballs.push({
+      x: boss.x,
+      y: boss.y,
+      vx: (dx/dist)*speed,
+      vy: (dy/dist)*speed,
+      size: 10 + Math.random()*6
     });
+    bossFireTimer = 60 + Math.floor(Math.random()*60); // Fire every 1-2 seconds
   }
 
-  // Bats for Level 2
-  if (currentLevel === 2) {
-    for (let i = 0; i < 4; i++) {
-      bats.push({
-        x: Math.random() * W,
-        y: 40 + Math.random() * 80,
-        vx: (Math.random() < 0.5 ? 1 : -1) * (1 + Math.random() * 1.5),
-        phase: Math.random() * Math.PI * 2
-      });
+  // Update fireballs
+  for (let i = fireballs.length-1; i >= 0; i--) {
+    const fb = fireballs[i];
+    fb.x += fb.vx;
+    fb.y += fb.vy;
+    // Remove if off screen
+    if (fb.x < -50 || fb.x > W+50 || fb.y < -50 || fb.y > H+50) {
+      fireballs.splice(i, 1);
+      continue;
+    }
+    // Hit dino?
+    if (invincibleTimer <= 0) {
+      const fdx = dino.x - fb.x;
+      const fdy = dino.y - fb.y;
+      const fdist = Math.sqrt(fdx*fdx + fdy*fdy);
+      if (fdist < DINO_SIZE*0.4 + fb.size) {
+        // Hit!
+        fireballs.splice(i, 1);
+        lives--;
+        invincibleTimer = 90; // 1.5 seconds invincibility
+        playSfxHit();
+        spawnParticles(dino.x, dino.y, ['#FF5252','#FF8A80','#FF1744','#D50000']);
+        if (lives <= 0) {
+          gameOver();
+          return;
+        }
+      }
     }
   }
 }
 
+// ============ GAME LOGIC ============
+function initGame() {
+  const lvl = LEVELS[currentLevel];
+  dino = {
+    x: W/2, y: groundY - DINO_SIZE*0.5, vx: 0, vy: 0,
+    onGround: true, facingRight: true,
+    speed: lvl.dinoSpeed, jumpsLeft: lvl.maxJumps, maxJumps: lvl.maxJumps
+  };
+  stars = []; clouds = []; particles = []; platforms = [];
+  bats = []; bubbles = []; seaweed = [];
+  boss = null; fireballs = [];
+  score = 0; totalStars = lvl.totalStars;
+  keysDown = {}; fogOffset = 0; lightningTimer = 300; lightningFlash = 0;
+  invincibleTimer = 0; bossFireTimer = 120;
+
+  // Lives only for Level 4
+  if (currentLevel === 4) { lives = 3; initBoss(); }
+
+  spawnPlatforms();
+
+  // Background color
+  const bgColors = { 1: '#87CEEB', 2: '#0D0D2B', 3: '#0D47A1', 4: '#1A0000' };
+  document.body.style.background = bgColors[currentLevel];
+
+  for (let i = 0; i < 3; i++) spawnStar();
+
+  // Clouds
+  const cc = currentLevel === 2 ? 7 : (currentLevel === 3 ? 0 : 5);
+  for (let i = 0; i < cc; i++) {
+    clouds.push({ x: Math.random()*W, y: 30+Math.random()*100, size: 20+Math.random()*30,
+      speed: currentLevel===1 ? 0.2+Math.random()*0.5 : 0.3+Math.random()*0.8 });
+  }
+
+  // Level 2 bats
+  if (currentLevel === 2) {
+    for (let i = 0; i < 4; i++) bats.push({ x: Math.random()*W, y: 40+Math.random()*80, vx: (Math.random()<0.5?1:-1)*(1+Math.random()*1.5), phase: Math.random()*Math.PI*2 });
+  }
+
+  // Level 3 underwater stuff
+  if (currentLevel === 3) {
+    for (let i = 0; i < 20; i++) bubbles.push({ x: Math.random()*W, y: Math.random()*groundY, size: 3+Math.random()*8, speed: 0.5+Math.random()*1.5, phase: Math.random()*Math.PI*2 });
+    for (let i = 0; i < 6; i++) seaweed.push({ x: 50+Math.random()*(W-100), h: 60+Math.random()*80, offset: Math.random()*10 });
+  }
+
+  // Show/hide lives display
+  document.getElementById('lives-display').style.display = currentLevel === 4 ? 'block' : 'none';
+}
+
 function startGame() {
   currentLevel = 1;
-  document.getElementById('start-screen').style.display = 'none';
-  document.getElementById('win-screen').style.display = 'none';
-  document.getElementById('level-screen').style.display = 'none';
+  hideAllScreens();
   document.getElementById('score-display').style.display = 'block';
   document.getElementById('stars-left').style.display = 'block';
   document.getElementById('level-display').style.display = 'block';
-
-  resize();
-  initGame();
-  gameRunning = true;
-
-  // Start audio (needs user gesture)
+  resize(); initGame(); gameRunning = true;
   initAudio();
   if (audioCtx.state === 'suspended') audioCtx.resume();
-  stopMusic();
-  musicStarted = true;
-  playMusic();
-
+  stopMusic(); musicStarted = true; playMusic();
   if (animFrame) cancelAnimationFrame(animFrame);
   loop();
 }
 
+function hideAllScreens() {
+  ['start-screen','win-screen','level-screen','gameover-screen'].forEach(id => document.getElementById(id).style.display = 'none');
+}
+
 function winGame() {
-  gameRunning = false;
-  stopMusic();
-  playSfxWin();
+  gameRunning = false; stopMusic(); playSfxWin();
   document.getElementById('score-display').style.display = 'none';
   document.getElementById('stars-left').style.display = 'none';
   document.getElementById('level-display').style.display = 'none';
+  document.getElementById('lives-display').style.display = 'none';
 
-  if (currentLevel === 1) {
-    // Show Level 2 transition screen
-    const levelScreen = document.getElementById('level-screen');
-    levelScreen.style.background = 'linear-gradient(180deg, #0D0D2B 0%, #2D1B4E 50%, #1A0E2E 100%)';
-    document.getElementById('level-emoji').textContent = '🦖👻';
-    document.getElementById('level-title').textContent = 'Level 2: Spooky Night!';
-    document.getElementById('level-subtitle').textContent = 'It\'s getting dark and mysterious... Can you find all the stars?';
-    levelScreen.style.display = 'flex';
+  if (currentLevel < MAX_LEVEL) {
+    nextLevel = currentLevel + 1;
+    const ls = document.getElementById('level-screen');
+    if (nextLevel === 2) {
+      ls.style.background = 'linear-gradient(180deg, #0D0D2B 0%, #2D1B4E 50%, #1A0E2E 100%)';
+      document.getElementById('level-emoji').textContent = '🦖👻';
+      document.getElementById('level-title').textContent = 'Level 2: Spooky Night!';
+      document.getElementById('level-subtitle').textContent = 'It\'s getting dark and mysterious... Can you find all the stars?';
+    } else if (nextLevel === 3) {
+      ls.style.background = 'linear-gradient(180deg, #0D47A1 0%, #1565C0 50%, #1E88E5 100%)';
+      document.getElementById('level-emoji').textContent = '🦖🐠';
+      document.getElementById('level-title').textContent = 'Level 3: Deep Sea Dive!';
+      document.getElementById('level-subtitle').textContent = 'Dive into the ocean! The water makes you float... collect all the stars!';
+    } else if (nextLevel === 4) {
+      ls.style.background = 'linear-gradient(180deg, #1A0000 0%, #5D0000 50%, #3E0000 100%)';
+      document.getElementById('level-emoji').textContent = '🦖🌋';
+      document.getElementById('level-title').textContent = 'BOSS FIGHT: Mr. Lava!';
+      document.getElementById('level-subtitle').textContent = 'Collect 10 water jugs to defeat Mr. Lava! Watch out for fireballs! You have 3 lives!';
+    }
+    ls.style.display = 'flex';
   } else {
-    // Final win — beat both levels!
+    // Beat all 4 levels!
     const msgs = [
-      "Rhaki & Rho, you're super star catchers! ⭐🏆",
-      "Rhaki & Rho conquered the spooky night! 🦖🌟",
-      "Amazing job, Rhaki & Rho! Both levels beaten! 🎊",
-      "Rhaki & Rho are champions! Hooray! 🏆🎉"
+      "Rhaki & Rho defeated Mr. Lava! Champions! 🏆🌊",
+      "Rhaki & Rho saved the day! All 4 levels beaten! 🎊🦖",
+      "Super star catchers Rhaki & Rho — LEGENDARY! ⭐🏆",
+      "Rhaki & Rho are unstoppable! Mr. Lava is toast! 🔥💧"
     ];
-    document.getElementById('win-msg').textContent = msgs[Math.floor(Math.random() * msgs.length)];
+    document.getElementById('win-msg').textContent = msgs[Math.floor(Math.random()*msgs.length)];
     document.getElementById('win-screen').style.display = 'flex';
   }
 }
 
+function gameOver() {
+  gameRunning = false; stopMusic(); playSfxGameOver();
+  document.getElementById('score-display').style.display = 'none';
+  document.getElementById('stars-left').style.display = 'none';
+  document.getElementById('level-display').style.display = 'none';
+  document.getElementById('lives-display').style.display = 'none';
+  const msgs = [
+    "Mr. Lava wins this time... Try again!",
+    "Ouch! Those fireballs are hot! Try again!",
+    "Mr. Lava got you! One more try?",
+    "Don't give up, Rhaki & Rho! Try again!"
+  ];
+  document.getElementById('gameover-msg').textContent = msgs[Math.floor(Math.random()*msgs.length)];
+  document.getElementById('gameover-screen').style.display = 'flex';
+}
+
 function startNextLevel() {
-  document.getElementById('level-screen').style.display = 'none';
-  currentLevel = 2;
+  hideAllScreens();
+  currentLevel = nextLevel;
   document.getElementById('score-display').style.display = 'block';
   document.getElementById('stars-left').style.display = 'block';
   document.getElementById('level-display').style.display = 'block';
-
-  resize();
-  initGame();
-  gameRunning = true;
-
+  resize(); initGame(); gameRunning = true;
   if (audioCtx.state === 'suspended') audioCtx.resume();
-  stopMusic();
-  musicStarted = true;
-  playMusic();
-
+  stopMusic(); musicStarted = true; playMusic();
   if (animFrame) cancelAnimationFrame(animFrame);
   loop();
 }
 
 function update() {
-  // Movement
   let moving = false;
-  if (keysDown['ArrowLeft'] || keysDown['left']) {
-    dino.vx = -dino.speed;
-    dino.facingRight = false;
-    moving = true;
-  }
-  if (keysDown['ArrowRight'] || keysDown['right']) {
-    dino.vx = dino.speed;
-    dino.facingRight = true;
-    moving = true;
-  }
-  if (!moving) {
-    dino.vx *= 0.8;
-  }
+  if (keysDown['ArrowLeft'] || keysDown['left']) { dino.vx = -dino.speed; dino.facingRight = false; moving = true; }
+  if (keysDown['ArrowRight'] || keysDown['right']) { dino.vx = dino.speed; dino.facingRight = true; moving = true; }
+  if (!moving) dino.vx *= 0.8;
 
-  // Jump (double jump supported!)
   if (keysDown['ArrowUp'] || keysDown[' '] || keysDown['up']) {
     if (!dino._jumpHeld && dino.jumpsLeft > 0) {
       dino.vy = LEVELS[currentLevel].jumpVelocity;
-      dino.onGround = false;
-      dino.jumpsLeft--;
-      dino._jumpHeld = true;
+      dino.onGround = false; dino.jumpsLeft--; dino._jumpHeld = true;
       playSfxJump();
     }
-  } else {
-    dino._jumpHeld = false;
-  }
+  } else { dino._jumpHeld = false; }
 
-  // Gravity
   dino.vy += LEVELS[currentLevel].gravity;
-  dino.x += dino.vx;
-  dino.y += dino.vy;
+  dino.x += dino.vx; dino.y += dino.vy;
 
-  // Platform collision (only when falling)
+  // Platform collision
   if (dino.vy > 0) {
     for (const p of platforms) {
-      const dinoBottom = dino.y + DINO_SIZE * 0.5;
-      const dinoLeft = dino.x - DINO_SIZE * 0.3;
-      const dinoRight = dino.x + DINO_SIZE * 0.3;
-      if (dinoBottom >= p.y && dinoBottom <= p.y + p.h + 10 &&
-          dinoRight > p.x && dinoLeft < p.x + p.w) {
-        dino.y = p.y - DINO_SIZE * 0.5;
-        dino.vy = 0;
-        dino.onGround = true;
-        dino.jumpsLeft = dino.maxJumps;
-        break;
+      const db = dino.y+DINO_SIZE*0.5, dl = dino.x-DINO_SIZE*0.3, dr = dino.x+DINO_SIZE*0.3;
+      if (db >= p.y && db <= p.y+p.h+10 && dr > p.x && dl < p.x+p.w) {
+        dino.y = p.y-DINO_SIZE*0.5; dino.vy = 0; dino.onGround = true; dino.jumpsLeft = dino.maxJumps; break;
       }
     }
   }
 
-  // Ground collision
-  if (dino.y >= groundY - DINO_SIZE * 0.5) {
-    dino.y = groundY - DINO_SIZE * 0.5;
-    dino.vy = 0;
-    dino.onGround = true;
-    dino.jumpsLeft = dino.maxJumps;
-  }
+  // Ground
+  if (dino.y >= groundY-DINO_SIZE*0.5) { dino.y = groundY-DINO_SIZE*0.5; dino.vy = 0; dino.onGround = true; dino.jumpsLeft = dino.maxJumps; }
 
-  // Screen wrapping
-  if (dino.x < -DINO_SIZE) dino.x = W + DINO_SIZE;
-  if (dino.x > W + DINO_SIZE) dino.x = -DINO_SIZE;
+  // Screen wrap
+  if (dino.x < -DINO_SIZE) dino.x = W+DINO_SIZE;
+  if (dino.x > W+DINO_SIZE) dino.x = -DINO_SIZE;
+
+  // Invincibility countdown
+  if (invincibleTimer > 0) invincibleTimer--;
 
   // Star collection
-  for (let i = stars.length - 1; i >= 0; i--) {
+  for (let i = stars.length-1; i >= 0; i--) {
     const s = stars[i];
-    const sy = s.y + Math.sin(s.phase) * s.bobAmount;
-    const dx = dino.x - s.x;
-    const dy = dino.y - sy;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-
-    if (dist < DINO_SIZE * 0.5 + STAR_SIZE * 0.5) {
-      // Collected!
-      spawnParticles(s.x, sy);
-      playSfxCollect();
-      stars.splice(i, 1);
-      score++;
-
-      if (score >= totalStars) {
-        winGame();
-        return;
-      }
-
-      // Spawn a new star
+    const sy = s.y + Math.sin(s.phase)*s.bobAmount;
+    const dx = dino.x-s.x, dy = dino.y-sy;
+    if (Math.sqrt(dx*dx+dy*dy) < DINO_SIZE*0.5+STAR_SIZE*0.5) {
+      const cols = currentLevel === 4 ? ['#42A5F5','#64B5F6','#90CAF9','#BBDEFB'] : ['#FFD700','#FFF176','#FFAB00','#FFE082'];
+      spawnParticles(s.x, sy, cols);
+      playSfxCollect(); stars.splice(i, 1); score++;
+      if (score >= totalStars) { winGame(); return; }
       spawnStar();
     }
   }
 
-  // Animate star bobbing
-  stars.forEach(s => {
-    s.phase += s.bobSpeed;
-  });
-
-  // Move clouds
-  clouds.forEach(c => {
-    c.x += c.speed;
-    if (c.x > W + 100) c.x = -100;
-  });
-
+  stars.forEach(s => { s.phase += s.bobSpeed; });
+  clouds.forEach(c => { c.x += c.speed; if (c.x > W+100) c.x = -100; });
   updateParticles();
+
+  // Boss update for Level 4
+  if (currentLevel === 4) updateBoss();
 }
 
 function draw() {
   ctx.clearRect(0, 0, W, H);
-
   drawBackground();
   drawGround();
   drawPlatforms();
 
-  // Stars
+  // Collectibles
   stars.forEach(s => {
-    const sy = s.y + Math.sin(s.phase) * s.bobAmount;
-    drawStar(s.x, sy, STAR_SIZE, s.phase);
+    const sy = s.y + Math.sin(s.phase)*s.bobAmount;
+    if (currentLevel === 4) drawWaterJug(s.x, sy, STAR_SIZE*0.6, s.phase);
+    else drawStar(s.x, sy, STAR_SIZE, s.phase);
   });
+
+  // Boss & fireballs
+  if (boss) drawBoss(boss);
+  fireballs.forEach(fb => drawFireball(fb));
 
   // Dino
   drawDino(dino.x, dino.y, DINO_SIZE, dino.facingRight);
-
-  // Particles
   drawParticles();
 
   // HUD
-  document.getElementById('score-display').textContent = `⭐ ${score} / ${totalStars}`;
-  document.getElementById('stars-left').textContent =
-    `Catch ${totalStars - score} more star${totalStars - score !== 1 ? 's' : ''}!`;
-  document.getElementById('level-display').textContent = LEVELS[currentLevel].name;
+  const lvl = LEVELS[currentLevel];
+  const emoji = lvl.collectEmoji;
+  const name = lvl.collectName;
+  document.getElementById('score-display').textContent = `${emoji} ${score} / ${totalStars}`;
+  const remaining = totalStars - score;
+  document.getElementById('stars-left').textContent = `Catch ${remaining} more ${name}${remaining !== 1 ? 's' : ''}!`;
+  document.getElementById('level-display').textContent = lvl.name;
+  if (currentLevel === 4) document.getElementById('lives-display').textContent = '❤️'.repeat(lives);
 }
 
 function loop() {
   if (!gameRunning) return;
-  update();
-  draw();
+  update(); draw();
   animFrame = requestAnimationFrame(loop);
 }
 
-// --- Input ---
+// ============ INPUT ============
 window.addEventListener('keydown', e => {
   keysDown[e.key] = true;
-  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
-    e.preventDefault();
-  }
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
 });
+window.addEventListener('keyup', e => { keysDown[e.key] = false; });
 
-window.addEventListener('keyup', e => {
-  keysDown[e.key] = false;
-});
-
-// ===== Mobile on-screen controls =====
+// Mobile controls
 function showMobileUI() {
   document.getElementById('mobile-controls').style.display = 'block';
   document.getElementById('instructions-desktop').style.display = 'none';
   document.getElementById('instructions-mobile').style.display = 'block';
 }
-
 if (isMobile) showMobileUI();
 
-// Prevent all unwanted mobile browser behaviors
-document.addEventListener('touchmove', e => {
-  if (gameRunning) e.preventDefault();
-}, { passive: false });
-
-// Prevent double-tap zoom on iOS
+document.addEventListener('touchmove', e => { if (gameRunning) e.preventDefault(); }, { passive: false });
 let lastTouchEnd = 0;
-document.addEventListener('touchend', e => {
-  const now = Date.now();
-  if (now - lastTouchEnd <= 300) e.preventDefault();
-  lastTouchEnd = now;
-}, { passive: false });
+document.addEventListener('touchend', e => { const now = Date.now(); if (now-lastTouchEnd<=300) e.preventDefault(); lastTouchEnd = now; }, { passive: false });
 
-// ---- On-screen button handlers ----
 function setupButton(id, keyName) {
   const btn = document.getElementById(id);
-
-  btn.addEventListener('touchstart', e => {
-    e.preventDefault();
-    e.stopPropagation();
-    keysDown[keyName] = true;
-    btn.classList.add('pressed');
-  }, { passive: false });
-
-  btn.addEventListener('touchend', e => {
-    e.preventDefault();
-    e.stopPropagation();
-    keysDown[keyName] = false;
-    btn.classList.remove('pressed');
-  }, { passive: false });
-
-  btn.addEventListener('touchcancel', e => {
-    keysDown[keyName] = false;
-    btn.classList.remove('pressed');
-  });
-
-  // Also clear if finger slides off button
-  btn.addEventListener('touchleave', e => {
-    keysDown[keyName] = false;
-    btn.classList.remove('pressed');
-  });
+  btn.addEventListener('touchstart', e => { e.preventDefault(); e.stopPropagation(); keysDown[keyName] = true; btn.classList.add('pressed'); }, { passive: false });
+  btn.addEventListener('touchend', e => { e.preventDefault(); e.stopPropagation(); keysDown[keyName] = false; btn.classList.remove('pressed'); }, { passive: false });
+  btn.addEventListener('touchcancel', e => { keysDown[keyName] = false; btn.classList.remove('pressed'); });
+  btn.addEventListener('touchleave', e => { keysDown[keyName] = false; btn.classList.remove('pressed'); });
 }
-
 setupButton('btn-left', 'left');
 setupButton('btn-right', 'right');
 setupButton('btn-jump', 'up');
 
-// Multi-touch: allow holding left/right AND tapping jump simultaneously
-// We handle this by listening on the document for touches and mapping
-// each active touch to the button it's over.
-document.addEventListener('touchstart', e => {
-  if (!gameRunning) return;
-  // Prevent pull-to-refresh and overscroll
-  if (e.target === canvas) e.preventDefault();
-}, { passive: false });
-
-// Fallback: if user touches directly on the canvas (not a button),
-// use left-half/right-half for movement + tap to also jump
+document.addEventListener('touchstart', e => { if (!gameRunning) return; if (e.target === canvas) e.preventDefault(); }, { passive: false });
 canvas.addEventListener('touchstart', e => {
-  if (!gameRunning) return;
-  e.preventDefault();
-  for (const touch of e.changedTouches) {
-    // If touch is in the lower control zone, ignore (buttons handle it)
-    if (touch.clientY > H - 170) return;
-    // Tap anywhere on canvas = jump
-    keysDown['up'] = true;
-    setTimeout(() => { keysDown['up'] = false; }, 100);
-  }
+  if (!gameRunning) return; e.preventDefault();
+  for (const touch of e.changedTouches) { if (touch.clientY > H-170) return; keysDown['up'] = true; setTimeout(() => { keysDown['up'] = false; }, 100); }
 }, { passive: false });
-
-canvas.addEventListener('touchend', e => {
-  e.preventDefault();
-}, { passive: false });
+canvas.addEventListener('touchend', e => { e.preventDefault(); }, { passive: false });
 </script>
 </body>
 </html>
